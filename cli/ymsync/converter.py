@@ -91,3 +91,56 @@ def convert_if_needed(
     if dst.exists():
         return None
     return flac_to_alac(src, dst, ffmpeg_path=ffmpeg_path)
+
+
+def to_aac_m4a(
+    src: Path,
+    dst: Path,
+    *,
+    ffmpeg_path: str = "ffmpeg",
+    bitrate: str = "256k",
+    overwrite: bool = False,
+) -> Path:
+    """Transcode any audio source to AAC in an m4a container.
+
+    Used for YouTube audio when yt-dlp returns opus/webm — Apple Music does
+    not natively decode opus, so we transcode to AAC. We pick a generous
+    bitrate (256k by default) to minimise generation loss.
+    """
+    ensure_ffmpeg(ffmpeg_path)
+    if not src.is_file():
+        raise ConversionError(f"Source audio not found: {src}")
+    if dst.exists() and not overwrite:
+        return dst
+
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dst.with_name(dst.name + ".part")
+    if tmp.exists():
+        tmp.unlink()
+
+    cmd = [
+        ffmpeg_path,
+        "-hide_banner",
+        "-loglevel", "error",
+        "-y",
+        "-i", str(src),
+        "-vn",                  # drop any video stream (e.g. webm w/ thumbnail)
+        "-c:a", "aac",
+        "-b:a", bitrate,
+        "-movflags", "+faststart",
+        str(tmp),
+    ]
+    try:
+        proc = subprocess.run(cmd, check=False, capture_output=True, text=True)
+    except OSError as exc:
+        raise ConversionError(f"Failed to launch ffmpeg: {exc}") from exc
+
+    if proc.returncode != 0:
+        if tmp.exists():
+            tmp.unlink()
+        raise ConversionError(
+            f"ffmpeg failed (exit {proc.returncode}):\n{proc.stderr.strip()}"
+        )
+
+    tmp.replace(dst)
+    return dst

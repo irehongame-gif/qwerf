@@ -31,6 +31,17 @@
     <div id="settings-status" class="status muted" aria-live="polite"></div>
   </div>
 
+  <!--
+    Context section — populated when the active tab is a YouTube video or a
+    music.yandex.ru track page. Hidden otherwise.
+  -->
+  <section id="context" class="context hidden" aria-live="polite">
+    <header class="context-header">
+      <span class="context-label" id="context-label">From this page</span>
+    </header>
+    <div id="context-body" class="context-body"></div>
+  </section>
+
   <form id="search-form" class="search">
     <label class="search-input">
       <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
@@ -50,7 +61,7 @@
       <div class="hero">
         <img src="icons/icon128.png" alt="" width="56" height="56" />
         <p class="hero-title">Search Yandex.Music</p>
-        <p class="hero-sub">Find a song by name, artist, or album. Download grabs lossless and converts to ALAC for your library.</p>
+        <p class="hero-sub">Find a song by name, artist, or album. Or open a YouTube video / Yandex.Music track in another tab and qwerf offers a one-click download right here.</p>
       </div>
     </div>
   </main>
@@ -59,6 +70,11 @@
     <span id="footer-text"></span>
   </footer>
 
+  <!-- ============================================================== -->
+  <!--                            templates                            -->
+  <!-- ============================================================== -->
+
+  <!-- Used both for search results and the Yandex track context card. -->
   <template id="result-template">
     <li class="result" data-track-id="">
       <a class="cover" target="_blank" rel="noreferrer noopener">
@@ -75,6 +91,53 @@
         <span class="dl-label">Download</span>
       </button>
     </li>
+  </template>
+
+  <!-- YouTube context card. -->
+  <template id="yt-context-template">
+    <div class="yt-context">
+      <a class="yt-thumb" target="_blank" rel="noreferrer noopener">
+        <img alt="" loading="lazy" />
+      </a>
+      <div class="yt-body">
+        <a class="yt-title" target="_blank" rel="noreferrer noopener"></a>
+        <div class="yt-sub">
+          <span class="yt-channel"></span>
+          <span class="yt-dot" aria-hidden="true">·</span>
+          <span class="yt-duration"></span>
+        </div>
+        <div class="yt-actions">
+          <button class="yt-audio dl btn" type="button" data-state="idle">
+            <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+              <path fill="currentColor" d="M9 3v10.55A4 4 0 1 0 11 17V7h6V3H9Z"/>
+            </svg>
+            <span class="dl-label">Audio</span>
+          </button>
+          <div class="yt-video-row">
+            <select class="yt-quality" aria-label="Video quality"></select>
+            <button class="yt-video dl btn" type="button" data-state="idle">
+              <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+                <path fill="currentColor" d="M4 5h12a2 2 0 0 1 2 2v3l4-2v8l-4-2v3a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z"/>
+              </svg>
+              <span class="dl-label">Video</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </template>
+
+  <template id="context-loading-template">
+    <div class="context-loading">
+      <div class="spinner" aria-hidden="true"></div>
+      <span class="muted">Loading info from this page…</span>
+    </div>
+  </template>
+
+  <template id="context-error-template">
+    <div class="context-error">
+      <span class="status err"></span>
+    </div>
   </template>
 </body>
 <script src="popup.js"></script>

@@ -16,6 +16,7 @@ dependencies = [
     #   pip install -U https://github.com/llistochek/yandex-music-downloader/archive/main.zip
     # We list it here as a direct URL so `pip install -e .` pulls it in automatically.
     "yandex-music-downloader @ https://github.com/llistochek/yandex-music-downloader/archive/main.zip",
+    "yt-dlp>=2024.5.0",
     "click>=8.1",
     "platformdirs>=4.0",
     "tomli>=2.0; python_version < '3.11'",

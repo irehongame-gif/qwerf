@@ -23,6 +23,7 @@ from ymsync.config import (
     ConfigError,
     DEFAULT_DOWNLOAD_DIR,
     DEFAULT_EXPORT_DIR,
+    DEFAULT_VIDEOS_DIR,
     load_config,
     write_config,
 )
@@ -72,27 +73,40 @@ def main() -> None:
 @click.option(
     "--download-dir",
     default=str(DEFAULT_DOWNLOAD_DIR),
-    prompt="Downloaded folder (raw FLAC)",
+    prompt="Downloaded folder (raw FLAC / yt-dlp output)",
     type=click.Path(),
 )
 @click.option(
     "--export-dir",
     default=str(DEFAULT_EXPORT_DIR),
-    prompt="Exported folder (ALAC m4a)",
+    prompt="Exported folder (ALAC m4a, flat)",
+    type=click.Path(),
+)
+@click.option(
+    "--videos-dir",
+    default=str(DEFAULT_VIDEOS_DIR),
+    prompt="Videos folder (YouTube downloads)",
     type=click.Path(),
 )
 @click.option(
     "--quality",
     default="lossless",
     type=click.Choice(["lossless", "normal", "low"], case_sensitive=False),
-    prompt="Quality",
+    prompt="Yandex.Music audio quality",
 )
-def init(token: str, download_dir: str, export_dir: str, quality: str) -> None:
+def init(
+    token: str,
+    download_dir: str,
+    export_dir: str,
+    videos_dir: str,
+    quality: str,
+) -> None:
     """Write the config file (token + folders + quality)."""
     cfg = Config(
         token=token.strip(),
         download_dir=Path(download_dir),
         export_dir=Path(export_dir),
+        videos_dir=Path(videos_dir),
         quality=quality.lower(),
     )
     cfg.ensure_dirs()
@@ -114,6 +128,7 @@ def where_cmd() -> None:
     click.echo(f"config:     {CONFIG_FILE}")
     click.echo(f"downloaded: {cfg.download_dir}")
     click.echo(f"exported:   {cfg.export_dir}")
+    click.echo(f"videos:     {cfg.videos_dir}")
 
 
 @main.command()
@@ -187,6 +202,83 @@ def download(track: str) -> None:
         raise click.ClickException(result.error or "unknown error")
     if result.exported_path:
         click.secho(f"Exported: {result.exported_path}", fg="green")
+
+
+@main.group("yt")
+def yt_group() -> None:
+    """YouTube audio / video downloads via yt-dlp."""
+
+
+@yt_group.command("audio")
+@click.argument("url")
+def yt_audio(url: str) -> None:
+    """Download YouTube audio as AAC m4a into your library."""
+    from ymsync.youtube import download_audio
+
+    try:
+        cfg = load_config()
+    except ConfigError as exc:
+        raise click.ClickException(str(exc)) from exc
+    cfg.ensure_dirs()
+    ensure_ffmpeg(cfg.ffmpeg_path)
+
+    def _progress(r: TrackResult) -> None:
+        click.echo(_format_stage(r))
+
+    result = download_audio(url, cfg, on_progress=_progress)
+    if result.stage == TrackStage.ERROR:
+        raise click.ClickException(result.error or "unknown error")
+    if result.exported_path:
+        click.secho(f"Exported: {result.exported_path}", fg="green")
+
+
+@yt_group.command("video")
+@click.argument("url")
+@click.option(
+    "--height",
+    type=int,
+    default=1080,
+    show_default=True,
+    help="Maximum video height (e.g. 720, 1080, 2160).",
+)
+def yt_video(url: str, height: int) -> None:
+    """Download a YouTube video into the videos folder."""
+    from ymsync.youtube import download_video
+
+    try:
+        cfg = load_config()
+    except ConfigError as exc:
+        raise click.ClickException(str(exc)) from exc
+    cfg.ensure_dirs()
+    ensure_ffmpeg(cfg.ffmpeg_path)
+
+    def _progress(r: TrackResult) -> None:
+        click.echo(_format_stage(r))
+
+    result = download_video(url, height, cfg, on_progress=_progress)
+    if result.stage == TrackStage.ERROR:
+        raise click.ClickException(result.error or "unknown error")
+    if result.exported_path:
+        click.secho(f"Saved: {result.exported_path}", fg="green")
+
+
+@yt_group.command("info")
+@click.argument("url")
+def yt_info(url: str) -> None:
+    """Print metadata + available video heights for a YouTube URL."""
+    from ymsync.youtube import fetch_info
+
+    try:
+        cfg = load_config()
+    except ConfigError:
+        cfg = None
+    info = fetch_info(url, cfg)
+    click.echo(f"title:    {info.title}")
+    click.echo(f"channel:  {info.channel}")
+    click.echo(f"duration: {info.duration_s}s")
+    click.echo(f"heights:  {', '.join(f'{h}p' for h in info.available_heights) or '-'}")
+    if info.audio_already_exported:
+        click.secho("audio:    already exported", fg="green")
 
 
 if __name__ == "__main__":

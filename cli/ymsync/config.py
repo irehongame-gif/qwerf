@@ -26,6 +26,7 @@ CONFIG_FILE = CONFIG_DIR / "config.toml"
 
 DEFAULT_DOWNLOAD_DIR = Path.home() / "Music" / "qwerf" / "Downloaded"
 DEFAULT_EXPORT_DIR = Path.home() / "Music" / "qwerf" / "Exported"
+DEFAULT_VIDEOS_DIR = Path.home() / "Movies" / "qwerf"
 
 
 class ConfigError(RuntimeError):
@@ -37,6 +38,7 @@ class Config:
     token: str
     download_dir: Path = field(default_factory=lambda: DEFAULT_DOWNLOAD_DIR)
     export_dir: Path = field(default_factory=lambda: DEFAULT_EXPORT_DIR)
+    videos_dir: Path = field(default_factory=lambda: DEFAULT_VIDEOS_DIR)
     quality: str = "lossless"  # lossless | normal | low
     ffmpeg_path: str = "ffmpeg"
     server_host: str = "127.0.0.1"
@@ -45,6 +47,7 @@ class Config:
     def __post_init__(self) -> None:
         self.download_dir = Path(self.download_dir).expanduser()
         self.export_dir = Path(self.export_dir).expanduser()
+        self.videos_dir = Path(self.videos_dir).expanduser()
         if self.quality not in {"lossless", "normal", "low"}:
             raise ConfigError(
                 f"Invalid quality {self.quality!r}; expected lossless|normal|low"
@@ -53,6 +56,7 @@ class Config:
     def ensure_dirs(self) -> None:
         self.download_dir.mkdir(parents=True, exist_ok=True)
         self.export_dir.mkdir(parents=True, exist_ok=True)
+        self.videos_dir.mkdir(parents=True, exist_ok=True)
 
 
 def _config_path() -> Path:
@@ -85,6 +89,7 @@ def write_config(cfg: Config, path: Optional[Path] = None) -> Path:
         "token": cfg.token,
         "download_dir": str(cfg.download_dir),
         "export_dir": str(cfg.export_dir),
+        "videos_dir": str(cfg.videos_dir),
         "quality": cfg.quality,
         "ffmpeg_path": cfg.ffmpeg_path,
         "server_host": cfg.server_host,

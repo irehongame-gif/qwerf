@@ -1,23 +1,27 @@
 # qwerf
 
-A small toolkit to mirror your Yandex.Music **"My Favorites"** to a local lossless
-ALAC (Apple-friendly) library, plus on-demand search & download from a Chrome popup.
+A small toolkit to mirror your Yandex.Music **"My Favorites"** to a local
+lossless ALAC (Apple-friendly) library, with on-demand search & download from
+a Chrome popup, plus context-aware **YouTube audio + video** downloads when
+you're on a YouTube tab.
 
 The repo is a monorepo of three nested projects:
 
 | Folder        | What it is                              | Runs as                               |
 |---------------|------------------------------------------|----------------------------------------|
-| `cli/`        | Sync engine + command-line tool          | `ymsync sync`                          |
+| `cli/`        | Sync engine + command-line tool          | `ymsync sync`, `ymsync yt audio …`     |
 | `server/`     | Local listener for the Chrome extension  | `ymsync-server` (FastAPI, localhost)   |
 | `extension/`  | Chrome extension popup (MV3)             | Loaded unpacked into Chrome            |
 
-> Targeted at **macOS**. ffmpeg is required for FLAC → ALAC conversion.
+> Targeted at **macOS**. ffmpeg is required for FLAC → ALAC conversion and for
+> yt-dlp's audio/video post-processing. yt-dlp is a Python dependency of the
+> CLI package.
 
 ---
 
 ## Flow
 
-For every track (whether triggered by `sync` or by the extension):
+For every Yandex.Music track (whether triggered by `sync` or by the popup):
 
 ```
 Yandex.Music → Downloaded/<Artist - Title>.flac   (raw lossless, kept as backup)
@@ -25,8 +29,20 @@ Yandex.Music → Downloaded/<Artist - Title>.flac   (raw lossless, kept as backu
               → Exported/<Artist - Title>.m4a     (flat, no folders)
 ```
 
-If the file already exists in `Exported/`, the track is skipped entirely.
-If it exists in `Downloaded/` but not in `Exported/`, only the convert step runs.
+For YouTube audio:
+
+```
+YouTube → Downloaded/<Channel - Title>.m4a       (yt-dlp + AAC postproc)
+        → Exported/<Channel - Title>.m4a         (copy / transmux to AAC m4a)
+```
+
+For YouTube video:
+
+```
+YouTube → videos_dir/<Channel - Title [<height>p]>.mp4
+```
+
+If the target already exists, the track/video is skipped entirely.
 
 ## Quick start
 
@@ -34,12 +50,12 @@ If it exists in `Downloaded/` but not in `Exported/`, only the convert step runs
 # 1. Install ffmpeg (macOS)
 brew install ffmpeg
 
-# 2. Install the CLI
+# 2. Install the CLI (pulls yt-dlp + yandex-music-* in)
 cd cli
 pip install -e .
 
-# 3. Configure (token + folders)
-ymsync init        # writes ~/.config/ymsync/config.toml interactively
+# 3. Configure (token + folders, including the new videos folder)
+ymsync init
 
 # 4. Sync favorites
 ymsync sync
@@ -61,7 +77,7 @@ into the config (or set `YMSYNC_TOKEN` env var).
 
 ```
 qwerf/
-├── cli/               Sync engine (also exposes the shared `ymsync` package)
+├── cli/               Sync engine + ymsync CLI (also exports the shared `ymsync` package)
 ├── server/            FastAPI listener consumed by the Chrome extension
 ├── extension/         Chrome MV3 popup
 └── README.md

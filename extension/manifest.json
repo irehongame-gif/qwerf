@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "qwerf — Yandex.Music sync",
   "short_name": "qwerf",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Search Yandex.Music and download tracks straight to your local lossless library via the qwerf listener.",
   "action": {
     "default_title": "qwerf",
@@ -20,7 +20,7 @@
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
-  "permissions": ["storage"],
+  "permissions": ["storage", "tabs"],
   "host_permissions": [
     "http://127.0.0.1/*",
     "http://localhost/*"
