@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="color-scheme" content="light dark" />
+  <title>qwerf</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <img src="icons/icon32.png" alt="" width="20" height="20" />
+      <span>qwerf</span>
+    </div>
+    <button id="settings-toggle" class="icon-btn" type="button" aria-label="Settings" title="Settings">
+      <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+        <path fill="currentColor" d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Zm9.4 4-2 .3-.4 1 1.2 1.6a.6.6 0 0 1-.1.8l-1.5 1.5a.6.6 0 0 1-.8.1L16.2 16l-1 .4-.3 2a.6.6 0 0 1-.6.5h-2.6a.6.6 0 0 1-.6-.5l-.3-2-1-.4-1.6 1.2a.6.6 0 0 1-.8-.1L5.9 15.6a.6.6 0 0 1-.1-.8L7 13.2l-.4-1-2-.3a.6.6 0 0 1-.5-.6V8.7a.6.6 0 0 1 .5-.6l2-.3.4-1L5.8 5.2a.6.6 0 0 1 .1-.8L7.4 2.9a.6.6 0 0 1 .8-.1L9.8 4l1-.4.3-2a.6.6 0 0 1 .6-.5h2.6a.6.6 0 0 1 .6.5l.3 2 1 .4 1.6-1.2a.6.6 0 0 1 .8.1l1.5 1.5a.6.6 0 0 1 .1.8L18.9 7l.4 1 2 .3a.6.6 0 0 1 .5.6v2.6a.6.6 0 0 1-.4.5Z"/>
+      </svg>
+    </button>
+  </header>
+
+  <div id="settings-panel" class="settings hidden">
+    <label class="field">
+      <span>Server URL</span>
+      <input id="server-url" type="url" placeholder="http://127.0.0.1:8765" />
+    </label>
+    <div class="row gap">
+      <button id="settings-test" class="btn ghost" type="button">Test connection</button>
+      <button id="settings-save" class="btn" type="button">Save</button>
+    </div>
+    <div id="settings-status" class="status muted" aria-live="polite"></div>
+  </div>
+
+  <form id="search-form" class="search">
+    <label class="search-input">
+      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+        <path fill="currentColor" d="M10 4a6 6 0 1 1-3.9 10.6l-3.3 3.3-1.4-1.4 3.3-3.3A6 6 0 0 1 10 4Zm0 2a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z"/>
+      </svg>
+      <input id="q" type="search" placeholder="Search Yandex.Music…" autocomplete="off" autofocus />
+      <button id="clear" type="button" class="icon-btn small hidden" aria-label="Clear">
+        <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+          <path fill="currentColor" d="M6.4 5 12 10.6 17.6 5 19 6.4 13.4 12 19 17.6 17.6 19 12 13.4 6.4 19 5 17.6 10.6 12 5 6.4Z"/>
+        </svg>
+      </button>
+    </label>
+  </form>
+
+  <main id="results" class="results" aria-live="polite">
+    <div class="placeholder" id="placeholder">
+      <div class="hero">
+        <img src="icons/icon128.png" alt="" width="56" height="56" />
+        <p class="hero-title">Search Yandex.Music</p>
+        <p class="hero-sub">Find a song by name, artist, or album. Download grabs lossless and converts to ALAC for your library.</p>
+      </div>
+    </div>
+  </main>
+
+  <footer id="footer" class="footer hidden">
+    <span id="footer-text"></span>
+  </footer>
+
+  <template id="result-template">
+    <li class="result" data-track-id="">
+      <a class="cover" target="_blank" rel="noreferrer noopener">
+        <img alt="" loading="lazy" />
+      </a>
+      <a class="meta" target="_blank" rel="noreferrer noopener">
+        <span class="title"></span>
+        <span class="artists"></span>
+      </a>
+      <button class="dl btn" type="button">
+        <svg class="dl-icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+          <path fill="currentColor" d="M11 3h2v9.6l3.3-3.3 1.4 1.4L12 16.4l-5.7-5.7 1.4-1.4L11 12.6V3Zm-7 16h16v2H4v-2Z"/>
+        </svg>
+        <span class="dl-label">Download</span>
+      </button>
+    </li>
+  </template>
+</body>
+<script src="popup.js"></script>
+</html>

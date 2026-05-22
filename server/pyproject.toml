@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ymsync-server"
+version = "0.1.0"
+description = "Local listener for the qwerf Chrome extension (search + on-demand download)"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "qwerf" }]
+license = { text = "MIT" }
+dependencies = [
+    # `ymsync` is the local CLI package; install it first with:
+    #     pip install -e ../cli
+    # before installing this server. We don't declare it as a direct dep to
+    # keep things plain-pip friendly without uv/poetry-only path syntax.
+    "ymsync",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "pydantic>=2.5",
+]
+
+[project.scripts]
+ymsync-server = "ymsync_server.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["ymsync_server*"]
