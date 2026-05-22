@@ -170,8 +170,10 @@ class TaskManager:
     def is_track_exported(self, track_id: str) -> Optional[Path]:
         """Fast path for the popup's per-result 'In library' badge.
 
-        First the SQLite index (no I/O beyond a SELECT), then a filesystem
-        check at the expected export path as a fallback.
+        We accept *any* kind as proof of "I have this song" — see the note
+        in :func:`ymsync_server.app._hit_to_model`: Music.app moves files
+        out of the auto-import inbox almost immediately, so the persistent
+        evidence lives in ``KIND_DOWNLOADED``.
         """
         try:
             track = fetch_track(self._client, track_id)
@@ -183,11 +185,8 @@ class TaskManager:
             album = (track.albums[0].title or "").strip() or None
         artists = [a.name for a in (track.artists or []) if a and a.name]
 
-        target_kinds = (
-            [KIND_EXPORTED] if self._cfg.auto_import_to_music else None
-        )
         rows = self._library_index.find_by_metadata(
-            title, album, artists, kinds=target_kinds
+            title, album, artists, kinds=None
         )
         for row in rows:
             if Path(row.path).is_file():
@@ -204,6 +203,13 @@ class TaskManager:
             task = self._tasks.get(tid)
             if not task:
                 return None
+            # Errors and cancellations expire from dedup immediately so a
+            # second click on the row acts as 'retry' and starts a fresh
+            # task. Successful (DONE/SKIPPED) tasks stay around for a few
+            # minutes so accidental double-clicks don't queue redundant work.
+            if task.stage in (TrackStage.ERROR, TrackStage.CANCELLED):
+                self._by_kind_key.pop((kind, dedup_key), None)
+                return None
             if is_terminal(task.stage) and time.time() - task.updated_at > _FINISHED_TTL_S:
                 self._by_kind_key.pop((kind, dedup_key), None)
                 return None
@@ -219,7 +225,13 @@ class TaskManager:
         with self._lock:
             tasks = list(self._tasks.values())
         if active_only:
-            tasks = [t for t in tasks if not is_terminal(t.stage)]
+            # 'Active' means 'still relevant to the user' — anything in
+            # progress, plus errors that haven't been acknowledged yet.
+            # Done/skipped/cancelled are user-acknowledged terminal states
+            # and the popup hides them.
+            def _keep(s: TrackStage) -> bool:
+                return not is_terminal(s) or s == TrackStage.ERROR
+            tasks = [t for t in tasks if _keep(t.stage)]
         tasks.sort(key=lambda t: t.updated_at, reverse=True)
         return tasks[:limit]
 

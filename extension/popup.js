@@ -818,8 +818,13 @@ async function refreshActivePanel(server) {
   elements.activeList.innerHTML = "";
   for (const t of tasks) {
     elements.activeList.appendChild(renderActiveRow(server, t));
-    // Re-attach polling so stage transitions also update this panel.
-    pollTask(server, t.id, null, `task:${t.id}`);
+    // Only attach polling for tasks that can still change state. Errored
+    // rows are terminal; polling them would just thrash refreshActivePanel
+    // in an infinite loop (each tick would see 'error' and re-fetch the
+    // panel, which would re-attach the poll, which would tick again…).
+    if (t.stage !== "error") {
+      pollTask(server, t.id, null, `task:${t.id}`);
+    }
   }
 }
 
@@ -839,10 +844,16 @@ function renderActiveRow(server, task) {
     task.title || task.dedup_key || "(unnamed)";
 
   const subBits = [];
-  if (task.artists && task.artists.length) subBits.push(task.artists.join(", "));
-  if (task.height) subBits.push(`${task.height}p`);
-  if (task.group_label) subBits.push(`from “${task.group_label}”`);
-  if (task.total_bytes) subBits.push(formatBytes(task.total_bytes));
+  if (task.stage === "error" && task.error) {
+    // Errors lead the sub-line so the user sees what went wrong without
+    // having to dig.
+    subBits.push(task.error.replace(/\s+/g, " ").trim().slice(0, 100));
+  } else {
+    if (task.artists && task.artists.length) subBits.push(task.artists.join(", "));
+    if (task.height) subBits.push(`${task.height}p`);
+    if (task.group_label) subBits.push(`from “${task.group_label}”`);
+    if (task.total_bytes) subBits.push(formatBytes(task.total_bytes));
+  }
   node.querySelector(".active-sub").textContent = subBits.join(" · ");
 
   const stage = node.querySelector(".active-stage");
@@ -853,10 +864,29 @@ function renderActiveRow(server, task) {
   stage.className = `active-stage s-${task.stage}`;
 
   const cancel = node.querySelector(".active-cancel");
-  if (!task.cancellable) cancel.classList.add("hidden");
-  cancel.addEventListener("click", () => onCancelTaskClicked(server, task.id, node));
+  if (task.stage === "error") {
+    // Cancelling a finished-with-error task is a no-op server-side. The
+    // 'X' button just dismisses the row from the popup; clicking the
+    // original Audio/Video button retries (server expires errored tasks
+    // from the dedup map immediately).
+    cancel.title = "Dismiss";
+    cancel.addEventListener("click", () => onDismissTaskClicked(node));
+  } else if (!task.cancellable) {
+    cancel.classList.add("hidden");
+  } else {
+    cancel.title = "Cancel";
+    cancel.addEventListener("click", () =>
+      onCancelTaskClicked(server, task.id, node));
+  }
 
   return node;
+}
+
+function onDismissTaskClicked(rowNode) {
+  rowNode.remove();
+  if (!elements.activeList.children.length) {
+    elements.active.classList.add("hidden");
+  }
 }
 
 async function onCancelTaskClicked(server, taskId, rowNode) {

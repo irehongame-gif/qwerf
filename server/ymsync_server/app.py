@@ -31,6 +31,7 @@ POST            /tasks/groups/{group_id}/cancel           cancel a whole album/p
 
 from __future__ import annotations
 
+import asyncio
 import re
 import threading
 from contextlib import asynccontextmanager
@@ -228,14 +229,19 @@ def create_app(cfg: Optional[Config] = None) -> FastAPI:
         client = build_client(cfg.token)
         index = LibraryIndex(cfg.db_path)
 
-        # Warm the index in the background so server startup isn't blocked
-        # by a 10k-track scan on first run.
-        threading.Thread(
-            target=_initial_scan,
-            args=(index, cfg),
-            name="ymsync-initial-scan",
-            daemon=True,
-        ).start()
+        # Initial scan: synchronous on cold start (so the first /search after
+        # a fresh install correctly badges existing tracks); async otherwise
+        # so warm restarts don't pay the listdir cost twice.
+        cold_start = not index.all_rows()
+        if cold_start:
+            await _await_scan(index, cfg)
+        else:
+            threading.Thread(
+                target=_initial_scan,
+                args=(index, cfg),
+                name="ymsync-initial-scan",
+                daemon=True,
+            ).start()
 
         manager = TaskManager(cfg, client, index)
         app.state.cfg = cfg
@@ -491,13 +497,28 @@ def create_app(cfg: Optional[Config] = None) -> FastAPI:
 
 
 def _hit_to_model(hit, cfg: Config, index: LibraryIndex) -> SearchHitModel:
-    """Annotate a SearchHit with whether it's already in the library."""
-    target_kinds = [KIND_EXPORTED] if cfg.auto_import_to_music else [KIND_DOWNLOADED]
-    already = index.has_metadata(hit.title, hit.album, hit.artists, kinds=target_kinds)
-    if not already and cfg.auto_import_to_music:
-        # Filesystem fallback for files dropped into Exported by hand.
+    """Annotate a SearchHit with whether it's already in the library.
+
+    We match against ANY kind, not just KIND_EXPORTED. Music.app's
+    auto-import inbox is **transient** — as soon as Music.app picks files
+    up, they're moved out of ``Exported/`` into the actual Apple Music
+    library, leaving the inbox empty. So the persistent proof of "I have
+    this song" is the KIND_DOWNLOADED row (the raw FLAC/m4a backup we
+    keep). Looking at both kinds means the search badge stays correct
+    after Music.app has already eaten the exported copy.
+    """
+    already = index.has_metadata(hit.title, hit.album, hit.artists, kinds=None)
+    if not already:
+        # Filesystem fallback for files dropped in by hand without a row in
+        # the index yet (e.g. between an unfinished initial scan and the
+        # first user search).
         stem = stem_from_metadata(hit.artists, hit.title)
-        already = (cfg.export_dir / f"{stem}.m4a").is_file()
+        if (cfg.export_dir / f"{stem}.m4a").is_file():
+            already = True
+        elif (cfg.download_dir / f"{stem}.flac").is_file():
+            already = True
+        elif (cfg.download_dir / f"{stem}.m4a").is_file():
+            already = True
     return SearchHitModel(**hit.to_dict(), already_exported=already)
 
 
@@ -511,3 +532,14 @@ def _initial_scan(index: LibraryIndex, cfg: Config) -> None:
     except Exception:
         # The cache is non-essential; log nothing and move on.
         pass
+
+
+async def _await_scan(index: LibraryIndex, cfg: Config) -> None:
+    """Run :func:`_initial_scan` off the event loop and wait for it.
+
+    Used on cold starts so the first /search response carries correct
+    'already_exported' flags. ``asyncio.to_thread`` is preferred over
+    spawning a worker thread + joining because it propagates the right
+    cancellation semantics if the lifespan itself is shut down early.
+    """
+    await asyncio.to_thread(_initial_scan, index, cfg)

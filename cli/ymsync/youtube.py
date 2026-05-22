@@ -44,6 +44,19 @@ from ymsync.pipeline import TrackResult, TrackStage
 _HEIGHT_LADDER = (2160, 1440, 1080, 720, 480, 360, 240)
 
 
+# yt-dlp opts that every call shares. YouTube routinely TCP-resets connections
+# under load (we've seen `Connection reset by peer` on info fetches) — the
+# default of 0 retries surfaces those one-shot blips as hard failures. Five
+# retries with yt-dlp's exponential backoff catches transient flakiness while
+# still bailing on a genuinely broken URL within seconds.
+_RETRY_OPTS: dict = {
+    "retries": 5,
+    "extractor_retries": 5,
+    "fragment_retries": 5,
+    "socket_timeout": 30,
+}
+
+
 # ---------------------------------------------------------------------------
 # /youtube/info — metadata only, no download
 # ---------------------------------------------------------------------------
@@ -81,6 +94,7 @@ def fetch_info(
         "no_warnings": True,
         "skip_download": True,
         "noplaylist": True,
+        **_RETRY_OPTS,
     }
     with YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=False) or {}
@@ -393,6 +407,7 @@ def _run_ytdlp_audio(
         "progress_hooks": [
             _make_cancel_aware_progress_hook(on_progress, result, cancel_event)
         ],
+        **_RETRY_OPTS,
     }
     with YoutubeDL(opts) as ydl:
         ydl.extract_info(url, download=True)
@@ -461,6 +476,7 @@ def download_video(
             "progress_hooks": [
                 _make_cancel_aware_progress_hook(on_progress, result, cancel_event)
             ],
+            **_RETRY_OPTS,
         }
         with YoutubeDL(opts) as ydl:
             ydl.extract_info(url, download=True)
@@ -580,6 +596,7 @@ def fetch_playlist(
         "skip_download": True,
         "extract_flat": "in_playlist",
         "playlistend": int(limit),
+        **_RETRY_OPTS,
     }
     with YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=False) or {}
