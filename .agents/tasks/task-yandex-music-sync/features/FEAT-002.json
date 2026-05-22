@@ -1,0 +1,29 @@
+{
+  "id": "FEAT-002",
+  "type": "fix",
+  "description": "Simplify ym-sync to save all tracks as .m4a (native macOS playback). FLAC-in-MP4 and AAC-in-MP4 are both .m4a and play natively. Only convert via ffmpeg if raw FLAC is returned.",
+  "status": "in_progress",
+  "steps": [
+    "Update downloader.py: rename download_track_flac to download_track, handle Container.MP4 (save as .m4a, tag with mutagen.mp4.MP4), Container.FLAC (save as .flac, tag with mutagen.flac.FLAC), Container.MP3 (save as .mp3). Return dataclass with path, container, needs_conversion.",
+    "Update converter.py: rename convert_to_alac to convert_flac_to_alac (fallback only). Add copy_to_exported() function for copying .m4a files from Downloaded to Exported.",
+    "Update cli.py: simplify flow - download track (usually .m4a), save to Downloaded, copy to Exported (flat). Only convert via ffmpeg if raw FLAC. Remove complex retry logic. Remove --download-only flag.",
+    "Update README.md to reflect simplified flow (no ffmpeg required in normal operation).",
+    "Update pyproject.toml description."
+  ],
+  "acceptance_criteria": [
+    "pip install -e . succeeds without import errors",
+    "python -m ym_sync --help displays updated usage information",
+    "All modules import cleanly",
+    "Downloader handles Container.MP4, Container.FLAC, and Container.MP3",
+    "Converter has copy_to_exported and convert_flac_to_alac functions",
+    "CLI flow: download -> save to Downloaded -> copy/convert to Exported"
+  ],
+  "verification": [
+    "Run: pip install -e /projects/sandbox/qwerf/ and confirm exit code 0",
+    "Run: python3 -m ym_sync --help and confirm it shows updated usage",
+    "Run: python3 -c 'from ym_sync import api, client, downloader, converter, sync_state, cli' to confirm all modules import cleanly",
+    "Run: python3 -c 'from ym_sync.downloader import download_track, DownloadResult; from ym_sync.converter import copy_to_exported, convert_flac_to_alac'"
+  ],
+  "blocked_reason": null,
+  "findings": null
+}

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ym-sync"
 version = "0.1.0"
-description = "CLI tool for syncing Yandex Music favorites, downloading FLAC and converting to ALAC"
+description = "CLI tool for syncing Yandex Music favorites as .m4a files (native macOS playback)"
 requires-python = ">=3.9"
 dependencies = [
     "yandex-music>=3.0.0",

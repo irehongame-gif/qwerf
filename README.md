@@ -1,13 +1,13 @@
 # ym-sync
 
-A CLI tool for syncing your Yandex Music favorites. Downloads tracks in FLAC (lossless) and converts them to ALAC (.m4a) format.
+A CLI tool for syncing your Yandex Music favorites as .m4a files. Tracks are downloaded in lossless quality (FLAC-in-MP4) when available, or AAC-in-MP4 otherwise. Both formats are saved as `.m4a` and play natively on macOS without any conversion.
 
 ## Prerequisites
 
 - Python 3.9+
-- ffmpeg (required for FLAC to ALAC conversion)
+- ffmpeg (optional, only needed in the rare case the API returns raw FLAC)
 
-### Installing ffmpeg
+### Installing ffmpeg (optional)
 
 - **macOS:** `brew install ffmpeg`
 - **Ubuntu/Debian:** `sudo apt install ffmpeg`
@@ -58,7 +58,7 @@ ym-sync --output-dir ~/Music
 | `--timeout` | `20` | Request timeout (seconds) |
 | `--max-retries` | `20` | Max retries on network error |
 | `--retry-delay` | `5` | Delay between retries (seconds) |
-| `--download-only` | off | Only download FLAC, skip ALAC conversion |
+| `--download-only` | off | Only download, skip export to Exported/ |
 
 ### Running as a module
 
@@ -66,17 +66,27 @@ ym-sync --output-dir ~/Music
 python -m ym_sync --help
 ```
 
+## How It Works
+
+1. The tool requests tracks at lossless quality from the Yandex Music API
+2. The API returns FLAC-in-MP4 (lossless .m4a) when available, or AAC-in-MP4 (lossy .m4a) otherwise
+3. Files are saved directly as `.m4a` in the `Downloaded/` folder with full metadata tags
+4. Files are then copied to the `Exported/` folder (flat, no subfolders)
+5. In the rare case the API returns raw FLAC, ffmpeg converts it to ALAC .m4a for export
+
+No ffmpeg conversion is needed in normal operation since both FLAC-in-MP4 and AAC-in-MP4 are already native .m4a files.
+
 ## Folder Structure
 
 After syncing, your output directory will look like:
 
 ```
 output-dir/
-  Downloaded/       # FLAC files with full metadata
-    Artist - Title.flac
+  Downloaded/       # .m4a files with full metadata (lossless or AAC)
+    Artist - Title [track_id].m4a
     ...
-  Exported/         # ALAC files (flat, no subfolders)
-    Artist - Title.m4a
+  Exported/         # Copies of .m4a files (flat, no subfolders)
+    Artist - Title [track_id].m4a
     ...
   .sync_state.json  # Tracks sync progress (do not delete)
 ```

@@ -7,10 +7,14 @@ import sys
 from pathlib import Path
 
 from ym_sync.client import init_client
-from ym_sync.converter import FfmpegNotFoundError, convert_to_alac
+from ym_sync.converter import (
+    FfmpegNotFoundError,
+    convert_flac_to_alac,
+    copy_to_exported,
+)
 from ym_sync.downloader import (
     build_filename,
-    download_track_flac,
+    download_track,
     fetch_favorites,
 )
 from ym_sync.sync_state import load_state, save_state
@@ -52,7 +56,10 @@ def main():
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(
         prog="ym-sync",
-        description="Sync Yandex Music favorites: download FLAC, convert to ALAC (.m4a)",
+        description=(
+            "Sync Yandex Music favorites as .m4a files (lossless FLAC-in-MP4 "
+            "or AAC-in-MP4, both native macOS playback)"
+        ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
@@ -99,7 +106,7 @@ def main():
     parser.add_argument(
         "--download-only",
         action="store_true",
-        help="Only download FLAC files, skip ALAC conversion",
+        help="Only download files, skip copying to Exported folder",
     )
 
     args = parser.parse_args()
@@ -159,29 +166,29 @@ def main():
             skipped_count += 1
             continue
 
-        # If downloaded but not exported, retry conversion (unless download-only)
+        # If downloaded but not exported, try to export
         if existing and existing.get("status") == "downloaded":
             if args.download_only:
                 skipped_count += 1
                 continue
-            # Attempt to convert the previously downloaded file
+            # Try to export the previously downloaded file
             downloaded_filename = existing.get("filename", filename)
-            flac_path = downloaded_dir / f"{downloaded_filename}.flac"
-            if flac_path.is_file():
-                print(f"[{i}/{total}] Retrying conversion: {downloaded_filename}")
+            downloaded_ext = existing.get("extension", ".m4a")
+            src_path = downloaded_dir / f"{downloaded_filename}{downloaded_ext}"
+            if src_path.is_file():
+                print(f"[{i}/{total}] Exporting: {downloaded_filename}")
                 try:
-                    alac_path = convert_to_alac(flac_path, exported_dir)
+                    if downloaded_ext == ".flac":
+                        exported_path = convert_flac_to_alac(src_path, exported_dir)
+                    else:
+                        exported_path = copy_to_exported(src_path, exported_dir)
                     state[track_id]["status"] = "exported"
                     save_state(state_path, state)
-                    print(f"  Exported: {alac_path.name}")
+                    print(f"  Exported: {exported_path.name}")
                     downloaded_count += 1
                 except FfmpegNotFoundError:
                     print(
-                        "  Warning: ffmpeg not found, skipping ALAC conversion.",
-                        file=sys.stderr,
-                    )
-                    print(
-                        "  Install ffmpeg to enable conversion. FLAC file was saved.",
+                        "  Warning: ffmpeg not found, cannot convert raw FLAC.",
                         file=sys.stderr,
                     )
                 except subprocess.CalledProcessError as e:
@@ -190,46 +197,9 @@ def main():
                     if stderr_output:
                         print(f"  ffmpeg stderr: {stderr_output}", file=sys.stderr)
                 except Exception as e:
-                    print(f"  Warning: Conversion failed: {e}", file=sys.stderr)
-            else:
-                # FLAC file missing, re-download
-                print(f"[{i}/{total}] Re-downloading (FLAC missing): {filename}")
-                if not track.available:
-                    print(f"  Skipping (unavailable): {filename}")
-                    error_count += 1
-                    continue
-                try:
-                    flac_path = download_track_flac(
-                        client=client,
-                        track=track,
-                        downloaded_dir=downloaded_dir,
-                        delay=args.delay,
-                    )
-                except Exception as e:
-                    print(f"  Warning: Failed to download: {e}", file=sys.stderr)
-                    error_count += 1
-                    continue
-                state[track_id] = {"filename": filename, "status": "downloaded"}
-                save_state(state_path, state)
-                try:
-                    alac_path = convert_to_alac(flac_path, exported_dir)
-                    state[track_id]["status"] = "exported"
-                    save_state(state_path, state)
-                    print(f"  Exported: {alac_path.name}")
-                except FfmpegNotFoundError:
-                    print(
-                        "  Warning: ffmpeg not found, skipping ALAC conversion.",
-                        file=sys.stderr,
-                    )
-                except subprocess.CalledProcessError as e:
-                    stderr_output = e.stderr.decode() if e.stderr else ""
-                    print(f"  Warning: Conversion failed: {e}", file=sys.stderr)
-                    if stderr_output:
-                        print(f"  ffmpeg stderr: {stderr_output}", file=sys.stderr)
-                except Exception as e:
-                    print(f"  Warning: Conversion failed: {e}", file=sys.stderr)
-                downloaded_count += 1
-            continue
+                    print(f"  Warning: Export failed: {e}", file=sys.stderr)
+                continue
+            # Source file missing, fall through to re-download
 
         if not track.available:
             print(f"[{i}/{total}] Skipping (unavailable): {filename}")
@@ -239,7 +209,7 @@ def main():
         print(f"[{i}/{total}] Downloading: {filename}")
 
         try:
-            flac_path = download_track_flac(
+            result = download_track(
                 client=client,
                 track=track,
                 downloaded_dir=downloaded_dir,
@@ -250,24 +220,34 @@ def main():
             error_count += 1
             continue
 
+        # Determine extension from what was actually saved
+        ext = result.path.suffix
+
         # Update state as downloaded
-        state[track_id] = {"filename": filename, "status": "downloaded"}
+        state[track_id] = {
+            "filename": filename,
+            "extension": ext,
+            "status": "downloaded",
+        }
         save_state(state_path, state)
 
-        # Convert to ALAC unless download-only mode
+        # Export unless download-only mode
         if not args.download_only:
             try:
-                alac_path = convert_to_alac(flac_path, exported_dir)
+                if result.needs_conversion:
+                    exported_path = convert_flac_to_alac(result.path, exported_dir)
+                else:
+                    exported_path = copy_to_exported(result.path, exported_dir)
                 state[track_id]["status"] = "exported"
                 save_state(state_path, state)
-                print(f"  Exported: {alac_path.name}")
+                print(f"  Exported: {exported_path.name}")
             except FfmpegNotFoundError:
                 print(
-                    "  Warning: ffmpeg not found, skipping ALAC conversion.",
+                    "  Warning: ffmpeg not found, cannot convert raw FLAC.",
                     file=sys.stderr,
                 )
                 print(
-                    "  Install ffmpeg to enable conversion. FLAC file was saved.",
+                    "  Install ffmpeg to enable conversion. File saved in Downloaded/.",
                     file=sys.stderr,
                 )
             except subprocess.CalledProcessError as e:
@@ -276,11 +256,11 @@ def main():
                 if stderr_output:
                     print(f"  ffmpeg stderr: {stderr_output}", file=sys.stderr)
             except Exception as e:
-                print(f"  Warning: Conversion failed: {e}", file=sys.stderr)
+                print(f"  Warning: Export failed: {e}", file=sys.stderr)
 
         downloaded_count += 1
 
-    print(f"\nSync complete: {downloaded_count} downloaded, "
+    print(f"\nSync complete: {downloaded_count} processed, "
           f"{skipped_count} skipped (already synced), {error_count} errors.")
 
 
