@@ -1,5 +1,12 @@
 """yt-dlp powered YouTube audio + video downloads.
 
+A note on filename matching: video / audio titles routinely contain ``[…]``
+(e.g. ``[Mash-Up]``, ``[Official Video]``) and our own height tag is
+``[1080p]``. ``Path.glob`` interprets brackets as character classes, so
+``Path('/x').glob('foo [1080p].*')`` does **not** match ``foo [1080p].mp4`` —
+it matches ``foo 0.mp4``, ``foo 1.mp4`` … instead. We therefore avoid glob
+entirely and use :func:`_find_produced` which compares filenames literally.
+
 Same end-state as the Yandex pipeline:
 
 * **Audio**: ``Downloaded/{Channel} - {Title}.m4a`` (raw, kept) →
@@ -110,6 +117,21 @@ def fetch_info(url: str, cfg: Optional[Config] = None) -> YoutubeInfo:
     )
 
 
+def _find_produced(directory: Path, stem: str) -> Optional[Path]:
+    """Return the first file in ``directory`` whose stem matches exactly.
+
+    Avoids :meth:`pathlib.Path.glob` because the stems we deal with may
+    contain ``[…]`` which glob would treat as a character class.
+    """
+    if not directory.is_dir():
+        return None
+    prefix = f"{stem}."
+    for entry in directory.iterdir():
+        if entry.is_file() and entry.name.startswith(prefix):
+            return entry
+    return None
+
+
 def _best_thumbnail(info: dict) -> Optional[str]:
     if (single := info.get("thumbnail")):
         return single
@@ -161,7 +183,7 @@ def download_audio(
             if not download_target.is_file():
                 # yt-dlp may have produced a different extension if our
                 # postprocessor was bypassed; locate whatever it dropped.
-                fallback = next(cfg.download_dir.glob(f"{stem}.*"), None)
+                fallback = _find_produced(cfg.download_dir, stem)
                 if fallback is None:
                     raise RuntimeError(
                         "yt-dlp finished but no audio file was produced"
@@ -250,7 +272,7 @@ def download_video(
     result.extra["height"] = height
 
     # Existence check is per-(stem, height) so 720p and 1080p can coexist.
-    existing = next(cfg.videos_dir.glob(f"{tagged_stem}.*"), None)
+    existing = _find_produced(cfg.videos_dir, tagged_stem)
     if existing is not None:
         result.downloaded_path = existing
         result.exported_path = existing
@@ -282,9 +304,19 @@ def download_video(
         with YoutubeDL(opts) as ydl:
             ydl.extract_info(url, download=True)
 
-        produced = next(cfg.videos_dir.glob(f"{tagged_stem}.*"), None)
+        # ``merge_output_format='mp4'`` means the merged file is always at
+        # ``<tagged_stem>.mp4``; check that first, then fall back to a literal
+        # directory scan in case yt-dlp produced a different container (e.g.
+        # mkv when an mp4-incompatible codec showed up).
+        expected = cfg.videos_dir / f"{tagged_stem}.mp4"
+        produced = expected if expected.is_file() else _find_produced(
+            cfg.videos_dir, tagged_stem
+        )
         if produced is None:
-            raise RuntimeError("yt-dlp finished but no video file was produced")
+            raise RuntimeError(
+                f"yt-dlp finished but no file named '{tagged_stem}.*' was "
+                f"found in {cfg.videos_dir}"
+            )
         result.downloaded_path = produced
         result.exported_path = produced
         _emit(TrackStage.DONE)
