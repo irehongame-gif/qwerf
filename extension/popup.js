@@ -1,16 +1,4 @@
-/* qwerf popup — talks to the local ymsync-server.
- *
- * Layout / behaviour:
- *   1. On open we read the active tab URL.
- *      - If it looks like a YouTube video, we render a YouTube context card
- *        with audio + per-resolution video buttons.
- *      - If it looks like a music.yandex.ru track page, we render the track
- *        as a single result row with a Download button.
- *   2. The search bar always works regardless of context. Search results
- *      stack below the context card.
- *   3. Every download (search hit, Yandex context, YouTube audio, YouTube
- *      video) goes through the listener's task system, polled at /tasks/{id}.
- */
+/* qwerf popup — talks to the local ymsync-server. */
 
 const DEFAULT_SERVER = "http://127.0.0.1:8765";
 const SEARCH_DEBOUNCE_MS = 350;
@@ -20,38 +8,58 @@ const TASK_POLL_MS = 800;
 // Element handles
 // ---------------------------------------------------------------------------
 
+const $ = (id) => document.getElementById(id);
+
 const elements = {
-  form: document.getElementById("search-form"),
-  q: document.getElementById("q"),
-  clear: document.getElementById("clear"),
-  results: document.getElementById("results"),
-  placeholder: document.getElementById("placeholder"),
-  resultTemplate: document.getElementById("result-template"),
-  ytTemplate: document.getElementById("yt-context-template"),
-  contextLoadingTpl: document.getElementById("context-loading-template"),
-  contextErrorTpl: document.getElementById("context-error-template"),
-  contextSection: document.getElementById("context"),
-  contextBody: document.getElementById("context-body"),
-  contextLabel: document.getElementById("context-label"),
-  footer: document.getElementById("footer"),
-  footerText: document.getElementById("footer-text"),
-  settingsToggle: document.getElementById("settings-toggle"),
-  settings: document.getElementById("settings-panel"),
-  serverUrl: document.getElementById("server-url"),
-  settingsTest: document.getElementById("settings-test"),
-  settingsSave: document.getElementById("settings-save"),
-  settingsStatus: document.getElementById("settings-status"),
+  topbar: document.querySelector(".topbar"),
+  autoToggle: $("auto-toggle"),
+  autoInput: $("auto-import"),
+  settingsToggle: $("settings-toggle"),
+  settings: $("settings-panel"),
+  serverUrl: $("server-url"),
+  settingsTest: $("settings-test"),
+  settingsSave: $("settings-save"),
+  settingsStatus: $("settings-status"),
+
+  form: $("search-form"),
+  q: $("q"),
+  clear: $("clear"),
+
+  scroll: $("scroll"),
+  active: $("active"),
+  activeList: $("active-list"),
+  activeCancelAll: $("active-cancel-all"),
+  context: $("context"),
+  contextLabel: $("context-label"),
+  contextAction: $("context-action"),
+  contextBody: $("context-body"),
+  results: $("results"),
+  placeholder: $("placeholder"),
+
+  footer: $("footer"),
+  footerText: $("footer-text"),
+
+  resultTpl: $("result-template"),
+  ytTpl: $("yt-context-template"),
+  collHeaderTpl: $("collection-header-template"),
+  collRowTpl: $("collection-row-template"),
+  activeRowTpl: $("active-row-template"),
+  loadingTpl: $("context-loading-template"),
+  errorTpl: $("context-error-template"),
 };
 
-// Map of poll-key -> setTimeout handle. Keys are stable strings:
-//   yandex:<trackId>            (search results & yandex context)
-//   yt-audio:<url>              (YouTube audio)
-//   yt-video:<url>#h=<height>   (YouTube video, matches server dedup_key)
+/** Active polls. Keys are stable strings:
+ *    yandex:<trackId>            (search row)
+ *    yt-audio:<url>              (youtube audio)
+ *    yt-video:<url>#h=<height>   (youtube video; matches server dedup_key)
+ *    task:<task_id>              (active-jobs panel + cancellation)
+ */
 const activePolls = new Map();
 let lastSearchToken = 0;
+let serverSettings = null;
 
 // ---------------------------------------------------------------------------
-// Settings
+// Helpers
 // ---------------------------------------------------------------------------
 
 async function loadServerUrl() {
@@ -63,9 +71,66 @@ async function saveServerUrl(url) {
   await chrome.storage.sync.set({ serverUrl: url.replace(/\/+$/, "") });
 }
 
-async function refreshSettingsField() {
-  elements.serverUrl.value = await loadServerUrl();
+async function getJson(server, path) {
+  const r = await fetch(`${server}${path}`);
+  if (!r.ok) throw new Error((await readErr(r)) || `HTTP ${r.status}`);
+  return r.json();
 }
+
+async function postJson(server, path, body) {
+  const r = await fetch(`${server}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body || {}),
+  });
+  if (!r.ok) throw new Error((await readErr(r)) || `HTTP ${r.status}`);
+  return r.json();
+}
+
+async function putJson(server, path, body) {
+  const r = await fetch(`${server}${path}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body || {}),
+  });
+  if (!r.ok) throw new Error((await readErr(r)) || `HTTP ${r.status}`);
+  return r.json();
+}
+
+async function readErr(resp) {
+  try {
+    const j = await resp.json();
+    return j.detail || j.message;
+  } catch { return null; }
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])
+  );
+}
+
+function formatDuration(seconds) {
+  if (!seconds || seconds <= 0) return "";
+  const s = Math.round(seconds);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (h) return `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
+  return `${m}:${String(sec).padStart(2, "0")}`;
+}
+
+function formatBytes(n) {
+  if (!n || n < 0) return "";
+  const units = ["B", "KB", "MB", "GB"];
+  let i = 0; let v = n;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return `${v.toFixed(v < 10 ? 1 : 0)} ${units[i]}`;
+}
+
+// ---------------------------------------------------------------------------
+// Settings panel + auto-import toggle
+// ---------------------------------------------------------------------------
 
 elements.settingsToggle.addEventListener("click", () => {
   elements.settings.classList.toggle("hidden");
@@ -84,9 +149,7 @@ elements.settingsTest.addEventListener("click", async () => {
   const url = (elements.serverUrl.value || "").trim() || DEFAULT_SERVER;
   setSettingsStatus("Connecting…", "muted");
   try {
-    const r = await fetch(`${url}/health`);
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const data = await r.json();
+    const data = await getJson(url, "/health");
     setSettingsStatus(`OK — server v${data.version}`, "ok");
   } catch (err) {
     setSettingsStatus(`Failed: ${err.message}`, "err");
@@ -98,55 +161,104 @@ function setSettingsStatus(text, level) {
   elements.settingsStatus.className = `status ${level || "muted"}`;
 }
 
+elements.autoInput.addEventListener("change", async () => {
+  const want = elements.autoInput.checked;
+  const server = await loadServerUrl();
+  try {
+    const updated = await putJson(server, "/settings", {
+      auto_import_to_music: want,
+    });
+    serverSettings = updated;
+    syncAutoToggleUI();
+    showFooter(want
+      ? "Auto-import enabled — downloads will land in Apple Music."
+      : "Auto-import disabled — downloads stop after the Downloaded folder.");
+  } catch (err) {
+    elements.autoInput.checked = !want;  // revert
+    setSettingsStatus(`Auto-import update failed: ${err.message}`, "err");
+  }
+});
+
+function syncAutoToggleUI() {
+  if (!serverSettings) {
+    elements.autoToggle.classList.add("is-disabled");
+    elements.autoInput.disabled = true;
+    return;
+  }
+  elements.autoToggle.classList.remove("is-disabled");
+  elements.autoInput.disabled = false;
+  elements.autoInput.checked = !!serverSettings.auto_import_to_music;
+  elements.autoToggle.classList.toggle("is-on", elements.autoInput.checked);
+}
+
+async function loadSettings(server) {
+  try {
+    serverSettings = await getJson(server, "/settings");
+  } catch {
+    serverSettings = null;
+  }
+  syncAutoToggleUI();
+}
+
 // ---------------------------------------------------------------------------
 // Active-tab context detection
 // ---------------------------------------------------------------------------
 
 const YANDEX_HOSTS = new Set([
-  "music.yandex.ru",
-  "music.yandex.com",
-  "music.yandex.by",
-  "music.yandex.kz",
-  "music.yandex.tj",
-  "music.yandex.ua",
+  "music.yandex.ru", "music.yandex.com", "music.yandex.by",
+  "music.yandex.kz", "music.yandex.tj", "music.yandex.ua",
 ]);
 
 function detectContext(rawUrl) {
   if (!rawUrl) return null;
   let u;
-  try {
-    u = new URL(rawUrl);
-  } catch {
-    return null;
-  }
+  try { u = new URL(rawUrl); } catch { return null; }
 
-  // YouTube — watch / shorts / youtu.be
   const ytHost = u.hostname.replace(/^www\./, "").replace(/^m\./, "");
-  if (ytHost === "youtube.com") {
+
+  // YouTube playlist (priority over single-watch when ?list= is present).
+  if (ytHost === "youtube.com" || ytHost === "music.youtube.com") {
+    const list = u.searchParams.get("list");
+    if (list && !list.startsWith("RD")) {
+      // RD* = auto-generated radio. We still treat real PL/UU/OL playlists
+      // as playlists; radios fall through to the single-video card.
+      return { kind: "youtube_playlist", url: rawUrl, listId: list };
+    }
+    if (u.pathname === "/playlist" && list) {
+      return { kind: "youtube_playlist", url: rawUrl, listId: list };
+    }
     if (u.pathname === "/watch") {
       const v = u.searchParams.get("v");
-      if (v) return { kind: "youtube", url: youtubeWatchUrl(v) };
+      if (v) return { kind: "youtube_watch", url: ytWatchUrl(v) };
     }
     if (u.pathname.startsWith("/shorts/")) {
       const v = u.pathname.split("/")[2];
-      if (v) return { kind: "youtube", url: youtubeWatchUrl(v) };
+      if (v) return { kind: "youtube_watch", url: ytWatchUrl(v) };
     }
   }
   if (ytHost === "youtu.be") {
     const v = u.pathname.slice(1).split("/")[0];
-    if (v) return { kind: "youtube", url: youtubeWatchUrl(v) };
+    if (v) return { kind: "youtube_watch", url: ytWatchUrl(v) };
   }
 
-  // Yandex.Music track page
   if (YANDEX_HOSTS.has(u.hostname)) {
-    const m = u.pathname.match(/(?:^|\/)(?:album\/(\d+)\/)?track\/(\d+)/);
-    if (m) {
-      // Re-canonicalise so the server / link always sees a stable form.
-      const albumPart = m[1] ? `album/${m[1]}/` : "";
+    // Track URL: /album/<id>/track/<id> or /track/<id>
+    const trackMatch = u.pathname.match(/(?:^|\/)(?:album\/(\d+)\/)?track\/(\d+)/);
+    if (trackMatch) {
+      const albumPart = trackMatch[1] ? `album/${trackMatch[1]}/` : "";
       return {
         kind: "yandex_track",
-        url: `https://${u.hostname}/${albumPart}track/${m[2]}`,
-        trackId: m[2],
+        url: `https://${u.hostname}/${albumPart}track/${trackMatch[2]}`,
+        trackId: trackMatch[2],
+      };
+    }
+    // Album URL without /track/ suffix: /album/<id>
+    const albumMatch = u.pathname.match(/^\/album\/(\d+)\/?$/);
+    if (albumMatch) {
+      return {
+        kind: "yandex_album",
+        url: `https://${u.hostname}/album/${albumMatch[1]}`,
+        albumId: albumMatch[1],
       };
     }
   }
@@ -154,7 +266,7 @@ function detectContext(rawUrl) {
   return null;
 }
 
-function youtubeWatchUrl(videoId) {
+function ytWatchUrl(videoId) {
   return `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
 }
 
@@ -171,78 +283,158 @@ async function getActiveTabUrl() {
 // Context rendering
 // ---------------------------------------------------------------------------
 
-async function renderContext() {
+async function renderContext(server) {
   const url = await getActiveTabUrl();
   const ctx = detectContext(url);
   if (!ctx) {
-    elements.contextSection.classList.add("hidden");
+    elements.context.classList.add("hidden");
     return;
   }
-
-  elements.contextSection.classList.remove("hidden");
-  elements.contextLabel.textContent =
-    ctx.kind === "youtube" ? "From this YouTube page" : "From this Yandex.Music page";
+  elements.context.classList.remove("hidden");
+  elements.contextLabel.textContent = contextLabelFor(ctx.kind);
+  elements.contextAction.classList.add("hidden");
   elements.contextBody.innerHTML = "";
-  elements.contextBody.appendChild(elements.contextLoadingTpl.content.cloneNode(true));
+  elements.contextBody.appendChild(elements.loadingTpl.content.cloneNode(true));
 
-  const server = await loadServerUrl();
   try {
-    if (ctx.kind === "youtube") {
-      await renderYoutubeContext(server, ctx.url);
-    } else if (ctx.kind === "yandex_track") {
-      await renderYandexContext(server, ctx);
+    if (ctx.kind === "yandex_track") {
+      await renderYandexTrack(server, ctx);
+    } else if (ctx.kind === "yandex_album") {
+      await renderYandexAlbum(server, ctx);
+    } else if (ctx.kind === "youtube_watch") {
+      await renderYoutubeWatch(server, ctx.url);
+    } else if (ctx.kind === "youtube_playlist") {
+      await renderYoutubePlaylist(server, ctx.url);
     }
   } catch (err) {
     showContextError(err.message);
   }
 }
 
+function contextLabelFor(kind) {
+  switch (kind) {
+    case "yandex_track":     return "From this Yandex.Music page";
+    case "yandex_album":     return "Album on this page";
+    case "youtube_watch":    return "From this YouTube page";
+    case "youtube_playlist": return "Playlist on this page";
+    default: return "From this page";
+  }
+}
+
 function showContextError(message) {
-  const node = elements.contextErrorTpl.content.firstElementChild.cloneNode(true);
+  const node = elements.errorTpl.content.firstElementChild.cloneNode(true);
   node.querySelector(".status").textContent = message;
   elements.contextBody.innerHTML = "";
   elements.contextBody.appendChild(node);
 }
 
-async function renderYandexContext(server, ctx) {
-  const url = `${server}/yandex/track-info?url=${encodeURIComponent(ctx.url)}`;
-  const resp = await fetch(url);
-  if (!resp.ok) {
-    throw new Error(
-      (await safeReadError(resp)) || `Lookup failed (HTTP ${resp.status})`
-    );
-  }
-  const hit = await resp.json();
+// --- Yandex single track --------------------------------------------------
 
-  // Render with the same row template the search results use, wrapped in a
-  // <ul> for layout symmetry.
+async function renderYandexTrack(server, ctx) {
+  const hit = await getJson(
+    server, `/yandex/track-info?url=${encodeURIComponent(ctx.url)}`
+  );
   const ul = document.createElement("ul");
   ul.appendChild(renderResultRow(hit));
   elements.contextBody.innerHTML = "";
   elements.contextBody.appendChild(ul);
 }
 
-async function renderYoutubeContext(server, url) {
-  const resp = await fetch(`${server}/youtube/info?url=${encodeURIComponent(url)}`);
-  if (!resp.ok) {
-    throw new Error(
-      (await safeReadError(resp)) || `yt-dlp lookup failed (HTTP ${resp.status})`
-    );
-  }
-  const info = await resp.json();
+// --- Yandex album ---------------------------------------------------------
 
-  const node = elements.ytTemplate.content.firstElementChild.cloneNode(true);
+async function renderYandexAlbum(server, ctx) {
+  const data = await getJson(
+    server, `/yandex/album-info?url=${encodeURIComponent(ctx.url)}`
+  );
+  const album = data.album;
+  const tracks = data.tracks || [];
+
+  const header = elements.collHeaderTpl.content.firstElementChild.cloneNode(true);
+  const cover = header.querySelector(".collection-cover");
+  cover.href = album.yandex_url;
+  if (album.cover_url) cover.querySelector("img").src = album.cover_url;
+
+  const title = header.querySelector(".collection-title");
+  title.textContent = album.title;
+  title.href = album.yandex_url;
+
+  const sub = header.querySelector(".collection-sub");
+  const artists = (album.artists || []).join(", ") || "Unknown artist";
+  const yr = album.year ? ` · ${album.year}` : "";
+  sub.textContent = `${artists}${yr} · ${album.track_count} tracks`;
+
+  const allBtn = header.querySelector(".collection-all");
+  setDlState(allBtn, "idle", "Download all");
+  allBtn.addEventListener("click", () =>
+    onDownloadAllYandexAlbum(server, ctx, album, allBtn));
+
+  const list = document.createElement("ul");
+  list.className = "collection-list";
+  tracks.forEach((hit, i) => {
+    const row = renderCollectionRow(hit, i + 1, album.cover_url);
+    list.appendChild(row);
+  });
+
+  elements.contextBody.innerHTML = "";
+  elements.contextBody.appendChild(header);
+  elements.contextBody.appendChild(list);
+}
+
+function renderCollectionRow(hit, indexNum, fallbackCover) {
+  const node = elements.collRowTpl.content.firstElementChild.cloneNode(true);
+  node.querySelector(".row-num").textContent = String(indexNum);
+  const cover = node.querySelector(".row-cover");
+  cover.href = hit.yandex_url;
+  cover.querySelector("img").src = hit.cover_url || fallbackCover || "";
+  const meta = node.querySelector(".row-meta");
+  meta.href = hit.yandex_url;
+  meta.querySelector(".title").textContent = hit.title || "(untitled)";
+  meta.querySelector(".artists").textContent =
+    (hit.artists || []).join(", ") || "Unknown artist";
+  const dl = node.querySelector(".row-dl");
+  if (hit.already_exported) {
+    setDlState(dl, "skipped", "In library");
+    dl.disabled = true;
+  } else if (!hit.available) {
+    setDlState(dl, "error", "Unavailable");
+    dl.disabled = true;
+    node.classList.add("unavailable");
+  } else {
+    setDlState(dl, "idle", "Download");
+    dl.addEventListener("click", () => onYandexDownloadClicked(hit, dl));
+  }
+  return node;
+}
+
+async function onDownloadAllYandexAlbum(server, ctx, album, btn) {
+  setDlState(btn, "queued", "Queueing…");
+  let resp;
+  try {
+    resp = await postJson(server, "/yandex/album", { url: ctx.url });
+  } catch (err) {
+    setDlState(btn, "error", `Error: ${err.message.slice(0, 50)}`);
+    return;
+  }
+  // Wire up: refresh active panel and start polling each task.
+  await refreshActivePanel(server);
+  setDlState(btn, "skipped", `${resp.tasks.length} queued`);
+}
+
+// --- YouTube single video -------------------------------------------------
+
+async function renderYoutubeWatch(server, url) {
+  const info = await getJson(
+    server, `/youtube/info?url=${encodeURIComponent(url)}`
+  );
+  const node = elements.ytTpl.content.firstElementChild.cloneNode(true);
 
   const thumb = node.querySelector(".yt-thumb");
   thumb.href = info.url;
-  if (info.thumbnail_url) {
-    thumb.querySelector("img").src = info.thumbnail_url;
-  }
+  if (info.thumbnail_url) thumb.querySelector("img").src = info.thumbnail_url;
 
   const titleA = node.querySelector(".yt-title");
   titleA.href = info.url;
   titleA.textContent = info.title || "Untitled";
-  titleA.title = info.title || "";
 
   node.querySelector(".yt-channel").textContent = info.channel || "Unknown channel";
   node.querySelector(".yt-duration").textContent = formatDuration(info.duration_s);
@@ -251,7 +443,6 @@ async function renderYoutubeContext(server, url) {
     node.querySelector(".yt-dot").classList.add("hidden");
   }
 
-  // Quality dropdown: descending heights.
   const select = node.querySelector(".yt-quality");
   if (Array.isArray(info.available_heights) && info.available_heights.length) {
     for (const h of info.available_heights) {
@@ -260,7 +451,6 @@ async function renderYoutubeContext(server, url) {
       opt.textContent = `${h}p`;
       select.appendChild(opt);
     }
-    // Default to the highest available — that's what most people want.
     select.value = String(info.available_heights[0]);
   } else {
     const opt = document.createElement("option");
@@ -270,7 +460,6 @@ async function renderYoutubeContext(server, url) {
     node.querySelector(".yt-video").disabled = true;
   }
 
-  // Audio button.
   const audioBtn = node.querySelector(".yt-audio");
   if (info.audio_already_exported) {
     setDlState(audioBtn, "skipped", "In library");
@@ -280,21 +469,14 @@ async function renderYoutubeContext(server, url) {
     audioBtn.addEventListener("click", () => onYoutubeAudioClicked(info.url, audioBtn));
   }
 
-  // Video button.
   const videoBtn = node.querySelector(".yt-video");
   if (!videoBtn.disabled) {
     setDlState(videoBtn, "idle", "Video");
     videoBtn.addEventListener("click", () =>
-      onYoutubeVideoClicked(info.url, parseInt(select.value, 10), videoBtn)
-    );
+      onYoutubeVideoClicked(info.url, parseInt(select.value, 10), videoBtn));
   }
-
-  // If the user changes resolution mid-flight, drop any in-progress poll for
-  // this URL+height so the button state can be reused for the new selection.
   select.addEventListener("change", () => {
     if (videoBtn.dataset.state !== "idle" && videoBtn.dataset.state !== "skipped") {
-      // Clear poll for whichever height was last clicked; safest to clear all
-      // yt-video polls for this URL.
       for (const key of [...activePolls.keys()]) {
         if (key.startsWith(`yt-video:${info.url}`)) cancelPoll(key);
       }
@@ -307,14 +489,96 @@ async function renderYoutubeContext(server, url) {
   elements.contextBody.appendChild(node);
 }
 
-function formatDuration(seconds) {
-  if (!seconds || seconds <= 0) return "";
-  const s = Math.round(seconds);
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const sec = s % 60;
-  if (h) return `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
-  return `${m}:${String(sec).padStart(2, "0")}`;
+// --- YouTube playlist ----------------------------------------------------
+
+async function renderYoutubePlaylist(server, url) {
+  const info = await getJson(
+    server, `/youtube/playlist-info?url=${encodeURIComponent(url)}&limit=200`
+  );
+
+  const header = elements.collHeaderTpl.content.firstElementChild.cloneNode(true);
+  const cover = header.querySelector(".collection-cover");
+  // Use first entry's thumbnail as the playlist cover (yt-dlp doesn't always
+  // give a dedicated playlist thumbnail in flat extraction).
+  const firstThumb = (info.entries || []).find((e) => e.thumbnail_url)?.thumbnail_url;
+  cover.href = info.url;
+  if (firstThumb) cover.querySelector("img").src = firstThumb;
+
+  const title = header.querySelector(".collection-title");
+  title.textContent = info.title || "Untitled playlist";
+  title.href = info.url;
+
+  const sub = header.querySelector(".collection-sub");
+  sub.textContent = `${info.uploader || "—"} · ${info.entry_count} videos`;
+
+  // Mode toggle (audio | video) + quality select for video mode.
+  const modeBtn = header.querySelector(".collection-mode");
+  const qSelect = header.querySelector(".collection-quality");
+  modeBtn.classList.remove("hidden");
+  qSelect.classList.remove("hidden");
+  let mode = "audio";
+  modeBtn.textContent = "Audio";
+  qSelect.disabled = true;
+  for (const h of (info.available_heights || [1080, 720, 480, 360, 240])) {
+    const opt = document.createElement("option");
+    opt.value = String(h); opt.textContent = `${h}p`;
+    qSelect.appendChild(opt);
+  }
+  if (qSelect.options.length) qSelect.value = qSelect.options[0].value;
+  modeBtn.addEventListener("click", () => {
+    mode = mode === "audio" ? "video" : "audio";
+    modeBtn.textContent = mode === "audio" ? "Audio" : "Video";
+    qSelect.disabled = mode === "audio";
+  });
+
+  const allBtn = header.querySelector(".collection-all");
+  setDlState(allBtn, "idle", "Download all");
+  allBtn.addEventListener("click", async () => {
+    const body = { url, mode };
+    if (mode === "video") body.height = parseInt(qSelect.value, 10);
+    setDlState(allBtn, "queued", "Queueing…");
+    try {
+      const resp = await postJson(server, "/youtube/playlist", body);
+      await refreshActivePanel(server);
+      setDlState(allBtn, "skipped", `${resp.tasks.length} queued`);
+    } catch (err) {
+      setDlState(allBtn, "error", `Error: ${err.message.slice(0, 50)}`);
+    }
+  });
+
+  const list = document.createElement("ul");
+  list.className = "collection-list";
+  (info.entries || []).forEach((entry, i) => {
+    list.appendChild(renderYtPlaylistRow(entry, i + 1, qSelect));
+  });
+
+  elements.contextBody.innerHTML = "";
+  elements.contextBody.appendChild(header);
+  elements.contextBody.appendChild(list);
+}
+
+function renderYtPlaylistRow(entry, indexNum, qSelect) {
+  const node = elements.collRowTpl.content.firstElementChild.cloneNode(true);
+  node.querySelector(".row-num").textContent = String(indexNum);
+  const cover = node.querySelector(".row-cover");
+  cover.href = entry.url;
+  if (entry.thumbnail_url) cover.querySelector("img").src = entry.thumbnail_url;
+  const meta = node.querySelector(".row-meta");
+  meta.href = entry.url;
+  meta.querySelector(".title").textContent = entry.title || "Untitled";
+  meta.querySelector(".artists").textContent = entry.channel
+    ? `${entry.channel}${entry.duration_s ? ` · ${formatDuration(entry.duration_s)}` : ""}`
+    : (entry.duration_s ? formatDuration(entry.duration_s) : "");
+
+  const dl = node.querySelector(".row-dl");
+  if (entry.audio_already_exported) {
+    setDlState(dl, "skipped", "In library");
+    dl.disabled = true;
+  } else {
+    setDlState(dl, "idle", "Audio");
+    dl.addEventListener("click", () => onYoutubeAudioClicked(entry.url, dl));
+  }
+  return node;
 }
 
 // ---------------------------------------------------------------------------
@@ -327,10 +591,7 @@ elements.q.addEventListener("input", () => {
   elements.clear.classList.toggle("hidden", !elements.q.value);
   if (searchTimer) clearTimeout(searchTimer);
   const term = elements.q.value.trim();
-  if (!term) {
-    showPlaceholder();
-    return;
-  }
+  if (!term) { showPlaceholder(); return; }
   searchTimer = setTimeout(() => runSearch(term), SEARCH_DEBOUNCE_MS);
 });
 
@@ -350,7 +611,7 @@ elements.clear.addEventListener("click", () => {
 
 async function runSearch(term) {
   const token = ++lastSearchToken;
-  cancelPollsByPrefix("yandex:");  // search-result polls only; keep context.
+  cancelPollsByPrefix("yandex:");
   showFooter("Searching…");
   hidePlaceholder();
   renderEmptyResults();
@@ -358,13 +619,7 @@ async function runSearch(term) {
   const server = await loadServerUrl();
   let hits;
   try {
-    const url = `${server}/search?q=${encodeURIComponent(term)}&limit=30`;
-    const resp = await fetch(url);
-    if (!resp.ok) {
-      const detail = await safeReadError(resp);
-      throw new Error(detail || `HTTP ${resp.status}`);
-    }
-    hits = await resp.json();
+    hits = await getJson(server, `/search?q=${encodeURIComponent(term)}&limit=30`);
   } catch (err) {
     if (token !== lastSearchToken) return;
     showFooter(`Could not reach ${server} — ${err.message}`);
@@ -375,19 +630,6 @@ async function runSearch(term) {
   renderResults(hits);
 }
 
-async function safeReadError(resp) {
-  try {
-    const j = await resp.json();
-    return j.detail || j.message;
-  } catch {
-    return null;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Result rendering
-// ---------------------------------------------------------------------------
-
 function renderEmptyResults() {
   elements.results.innerHTML = "";
   const ul = document.createElement("ul");
@@ -397,24 +639,20 @@ function renderEmptyResults() {
 
 function renderResults(hits) {
   const ul = renderEmptyResults();
-  if (!hits.length) {
-    showFooter("No results.");
-    return;
-  }
+  if (!hits.length) { showFooter("No results."); return; }
   hideFooter();
   for (const hit of hits) ul.appendChild(renderResultRow(hit));
 }
 
 function renderResultRow(hit) {
-  const node = elements.resultTemplate.content.firstElementChild.cloneNode(true);
+  const node = elements.resultTpl.content.firstElementChild.cloneNode(true);
   node.dataset.trackId = hit.id;
   if (!hit.available) node.classList.add("unavailable");
 
   const cover = node.querySelector(".cover");
-  const coverImg = cover.querySelector("img");
   cover.href = hit.yandex_url;
   cover.title = "Open in Yandex.Music";
-  if (hit.cover_url) coverImg.src = hit.cover_url;
+  if (hit.cover_url) cover.querySelector("img").src = hit.cover_url;
 
   const meta = node.querySelector(".meta");
   meta.href = hit.yandex_url;
@@ -437,13 +675,6 @@ function renderResultRow(hit) {
   return node;
 }
 
-function setDlState(btn, state, label) {
-  btn.dataset.state = state;
-  btn.querySelector(".dl-label").textContent = label;
-  btn.disabled = state !== "idle" && state !== "error";
-  btn.title = state === "idle" ? "" : label;
-}
-
 // ---------------------------------------------------------------------------
 // Download orchestrators
 // ---------------------------------------------------------------------------
@@ -451,43 +682,41 @@ function setDlState(btn, state, label) {
 async function onYandexDownloadClicked(hit, btn) {
   setDlState(btn, "pending", "Queued…");
   const server = await loadServerUrl();
-  const task = await postJson(server, "/download", { track_id: String(hit.id) }, btn);
-  if (task) pollTask(server, task, btn, `yandex:${hit.id}`);
+  try {
+    const task = await postJson(server, "/download", {
+      track_id: String(hit.id),
+    });
+    pollTask(server, task.id, btn, `yandex:${hit.id}`);
+    refreshActivePanel(server);
+  } catch (err) {
+    setDlState(btn, "error", `Error: ${err.message.slice(0, 50)}`);
+  }
 }
 
 async function onYoutubeAudioClicked(url, btn) {
   setDlState(btn, "pending", "Queued…");
   const server = await loadServerUrl();
-  const task = await postJson(server, "/youtube/audio", { url }, btn);
-  if (task) pollTask(server, task, btn, `yt-audio:${url}`);
+  try {
+    const task = await postJson(server, "/youtube/audio", { url });
+    pollTask(server, task.id, btn, `yt-audio:${url}`);
+    refreshActivePanel(server);
+  } catch (err) {
+    setDlState(btn, "error", `Error: ${err.message.slice(0, 50)}`);
+  }
 }
 
 async function onYoutubeVideoClicked(url, height, btn) {
   if (!Number.isFinite(height) || height <= 0) {
-    setDlState(btn, "error", "Pick a quality");
-    return;
+    setDlState(btn, "error", "Pick a quality"); return;
   }
   setDlState(btn, "pending", "Queued…");
   const server = await loadServerUrl();
-  const task = await postJson(server, "/youtube/video", { url, height }, btn);
-  if (task) pollTask(server, task, btn, `yt-video:${url}#h=${height}`);
-}
-
-async function postJson(server, path, body, btn) {
   try {
-    const resp = await fetch(`${server}${path}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (!resp.ok) {
-      const detail = await safeReadError(resp);
-      throw new Error(detail || `HTTP ${resp.status}`);
-    }
-    return await resp.json();
+    const task = await postJson(server, "/youtube/video", { url, height });
+    pollTask(server, task.id, btn, `yt-video:${url}#h=${height}`);
+    refreshActivePanel(server);
   } catch (err) {
-    setDlState(btn, "error", `Error: ${err.message.slice(0, 60)}`);
-    return null;
+    setDlState(btn, "error", `Error: ${err.message.slice(0, 50)}`);
   }
 }
 
@@ -497,39 +726,57 @@ async function postJson(server, path, body, btn) {
 
 const STAGE_LABELS = {
   pending: "Queued…",
+  queued: "Queued…",
   downloading: "Downloading",
   converting: "Converting…",
+  exporting: "Exporting…",
   done: "In library",
   skipped: "In library",
   error: "Error",
+  cancelled: "Cancelled",
 };
 
-function pollTask(server, task, btn, key) {
-  cancelPoll(key);
+function setDlState(btn, state, label) {
+  btn.dataset.state = state;
+  const lbl = btn.querySelector(".dl-label");
+  if (lbl) lbl.textContent = label;
+  else btn.textContent = label;
+  btn.disabled = state !== "idle" && state !== "error";
+  btn.title = state === "idle" ? "" : label;
+}
 
+function pollTask(server, taskId, btn, key) {
+  cancelPoll(key);
   const tick = async () => {
     try {
-      const r = await fetch(`${server}/tasks/${task.id}`);
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const t = await r.json();
+      const t = await getJson(server, `/tasks/${taskId}`);
       if (t.stage === "error") {
-        setDlState(btn, "error", `Error: ${(t.error || "").slice(0, 60)}`);
+        if (btn) setDlState(btn, "error", `Error: ${(t.error || "").slice(0, 60)}`);
         cancelPoll(key);
+        refreshActivePanel(server);
+        return;
+      }
+      if (t.stage === "cancelled") {
+        if (btn) setDlState(btn, "cancelled", "Cancelled");
+        cancelPoll(key);
+        refreshActivePanel(server);
         return;
       }
       if (t.stage === "done" || t.stage === "skipped") {
-        setDlState(btn, t.stage, STAGE_LABELS[t.stage]);
+        if (btn) setDlState(btn, t.stage, STAGE_LABELS[t.stage]);
         cancelPoll(key);
+        refreshActivePanel(server);
         return;
       }
-      const base = STAGE_LABELS[t.stage] || t.stage;
-      const label =
-        t.stage === "downloading" && t.progress_pct != null
+      if (btn) {
+        const base = STAGE_LABELS[t.stage] || t.stage;
+        const lbl = (t.stage === "downloading" && t.progress_pct != null)
           ? `${base} ${t.progress_pct}%`
           : `${base}…`;
-      setDlState(btn, t.stage, label);
+        setDlState(btn, t.stage, lbl);
+      }
     } catch (err) {
-      setDlState(btn, "error", `Error: ${err.message.slice(0, 40)}`);
+      if (btn) setDlState(btn, "error", `Error: ${err.message.slice(0, 40)}`);
       cancelPoll(key);
       return;
     }
@@ -540,10 +787,7 @@ function pollTask(server, task, btn, key) {
 
 function cancelPoll(key) {
   const handle = activePolls.get(key);
-  if (handle) {
-    clearTimeout(handle);
-    activePolls.delete(key);
-  }
+  if (handle) { clearTimeout(handle); activePolls.delete(key); }
 }
 
 function cancelPollsByPrefix(prefix) {
@@ -551,6 +795,90 @@ function cancelPollsByPrefix(prefix) {
     if (key.startsWith(prefix)) cancelPoll(key);
   }
 }
+
+// ---------------------------------------------------------------------------
+// Active jobs panel (carries over between popup sessions)
+// ---------------------------------------------------------------------------
+
+async function refreshActivePanel(server) {
+  let tasks = [];
+  try {
+    tasks = await getJson(server, "/tasks?active=true&limit=50");
+  } catch {
+    elements.active.classList.add("hidden");
+    return;
+  }
+  if (!tasks.length) {
+    elements.active.classList.add("hidden");
+    elements.activeList.innerHTML = "";
+    return;
+  }
+  elements.active.classList.remove("hidden");
+  // Re-render: keep it simple, full refresh.
+  elements.activeList.innerHTML = "";
+  for (const t of tasks) {
+    elements.activeList.appendChild(renderActiveRow(server, t));
+    // Re-attach polling so stage transitions also update this panel.
+    pollTask(server, t.id, null, `task:${t.id}`);
+  }
+}
+
+function renderActiveRow(server, task) {
+  const node = elements.activeRowTpl.content.firstElementChild.cloneNode(true);
+  node.dataset.taskId = task.id;
+
+  const kindEl = node.querySelector(".active-kind");
+  if (task.kind === "yandex_track") {
+    kindEl.classList.add("k-yandex"); kindEl.textContent = "Y";
+  } else {
+    kindEl.classList.add("k-yt");
+    kindEl.textContent = task.kind === "youtube_video" ? "V" : "A";
+  }
+
+  node.querySelector(".active-title").textContent =
+    task.title || task.dedup_key || "(unnamed)";
+
+  const subBits = [];
+  if (task.artists && task.artists.length) subBits.push(task.artists.join(", "));
+  if (task.height) subBits.push(`${task.height}p`);
+  if (task.group_label) subBits.push(`from “${task.group_label}”`);
+  if (task.total_bytes) subBits.push(formatBytes(task.total_bytes));
+  node.querySelector(".active-sub").textContent = subBits.join(" · ");
+
+  const stage = node.querySelector(".active-stage");
+  const base = STAGE_LABELS[task.stage] || task.stage;
+  stage.textContent = task.stage === "downloading" && task.progress_pct != null
+    ? `${task.progress_pct}%`
+    : base;
+  stage.className = `active-stage s-${task.stage}`;
+
+  const cancel = node.querySelector(".active-cancel");
+  if (!task.cancellable) cancel.classList.add("hidden");
+  cancel.addEventListener("click", () => onCancelTaskClicked(server, task.id, node));
+
+  return node;
+}
+
+async function onCancelTaskClicked(server, taskId, rowNode) {
+  try {
+    await postJson(server, `/tasks/${taskId}/cancel`, {});
+  } catch {
+    /* ignore — refresh below will show whatever the server thinks */
+  }
+  cancelPoll(`task:${taskId}`);
+  refreshActivePanel(server);
+}
+
+elements.activeCancelAll.addEventListener("click", async () => {
+  const server = await loadServerUrl();
+  // No bulk endpoint without a group, so we cancel each visible row.
+  const ids = [...elements.activeList.querySelectorAll(".active-row")]
+    .map((r) => r.dataset.taskId).filter(Boolean);
+  await Promise.all(
+    ids.map((id) => postJson(server, `/tasks/${id}/cancel`, {}).catch(() => null))
+  );
+  refreshActivePanel(server);
+});
 
 // ---------------------------------------------------------------------------
 // Placeholder / footer
@@ -588,39 +916,29 @@ function showFooter(text) {
   elements.footer.classList.remove("hidden");
 }
 
-function hideFooter() {
-  elements.footer.classList.add("hidden");
-}
-
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, (c) =>
-    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])
-  );
-}
+function hideFooter() { elements.footer.classList.add("hidden"); }
 
 // ---------------------------------------------------------------------------
 // Bootstrap
 // ---------------------------------------------------------------------------
 
 (async function init() {
-  await refreshSettingsField();
+  elements.serverUrl.value = await loadServerUrl();
 
-  // Quick health probe so we can give immediate feedback if the server is down.
   const server = await loadServerUrl();
   let listenerOk = true;
   try {
-    const r = await fetch(`${server}/health`, { method: "GET" });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    await getJson(server, "/health");
   } catch {
     listenerOk = false;
     showFooter(`Listener offline at ${server}`);
   }
 
   if (listenerOk) {
-    // Render the page-context card *after* health passes — there's no point
-    // hitting /youtube/info or /yandex/track-info if the server is down.
-    renderContext().catch((err) => {
-      console.warn("context render failed", err);
-    });
+    await loadSettings(server);
+    await refreshActivePanel(server);
+    renderContext(server).catch((err) => console.warn("context render failed", err));
+  } else {
+    syncAutoToggleUI();
   }
 })();

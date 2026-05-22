@@ -42,40 +42,31 @@ html, body {
   font-size: 13px;
   color: var(--fg);
   background: var(--bg);
-  width: 560px;
-  /* Chrome popup max viewport is roughly 800x600. We use the full height. */
+  width: 600px;
   height: 600px;
   overflow: hidden;
   display: flex;
   flex-direction: column;
 }
 
-button {
-  font-family: inherit;
-  font-size: inherit;
-  cursor: pointer;
-}
-
+button { font-family: inherit; font-size: inherit; cursor: pointer; }
 a { color: inherit; text-decoration: none; }
-a:hover .title { text-decoration: underline; }
+a:hover .title, a:hover .yt-title, a:hover .collection-title {
+  text-decoration: underline;
+}
 
 /* ---------- Top bar ---------- */
 .topbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 14px;
+  padding: 8px 14px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-elev);
   flex: 0 0 auto;
 }
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-weight: 600;
-  letter-spacing: 0.2px;
-}
+.brand { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+.topbar-actions { display: flex; align-items: center; gap: 8px; }
 
 .icon-btn {
   border: 0;
@@ -85,11 +76,53 @@ a:hover .title { text-decoration: underline; }
   align-items: center;
   justify-content: center;
   border-radius: var(--radius-sm);
-  width: 28px;
-  height: 28px;
+  width: 28px; height: 28px;
 }
 .icon-btn:hover { background: var(--bg-soft); color: var(--fg); }
 .icon-btn.small { width: 22px; height: 22px; }
+
+/* ---------- Auto-import toggle ---------- */
+.auto-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px 4px 6px;
+  border-radius: 999px;
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--fg-muted);
+  user-select: none;
+  transition: color 120ms ease, background 120ms ease, border-color 120ms ease;
+}
+.auto-toggle:hover { color: var(--fg); }
+.auto-toggle input { display: none; }
+.toggle-track {
+  width: 26px; height: 14px;
+  background: var(--border);
+  border-radius: 999px;
+  position: relative;
+  flex: 0 0 auto;
+  transition: background 120ms ease;
+}
+.toggle-thumb {
+  position: absolute;
+  top: 1px; left: 1px;
+  width: 12px; height: 12px;
+  border-radius: 50%;
+  background: var(--bg);
+  transition: transform 120ms ease;
+}
+.auto-toggle input:checked ~ .toggle-track {
+  background: var(--accent);
+}
+.auto-toggle input:checked ~ .toggle-track .toggle-thumb {
+  transform: translateX(12px);
+}
+.auto-toggle.is-on { color: var(--fg); border-color: var(--accent); }
+.auto-toggle.is-disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* ---------- Settings panel ---------- */
 .settings {
@@ -145,18 +178,14 @@ a:hover .title { text-decoration: underline; }
 .search-input:focus-within { border-color: var(--accent); }
 .search-input svg { color: var(--fg-muted); flex: 0 0 auto; }
 .search-input input {
-  flex: 1;
-  border: 0;
-  background: transparent;
-  outline: none;
-  font: inherit;
-  color: var(--fg);
+  flex: 1; border: 0; background: transparent; outline: none;
+  font: inherit; color: var(--fg);
 }
 .search-input input::-webkit-search-decoration,
 .search-input input::-webkit-search-cancel-button { -webkit-appearance: none; }
 
-/* ---------- Results ---------- */
-.results {
+/* ---------- Scrollable main area ---------- */
+.scroll {
   flex: 1 1 auto;
   overflow-y: auto;
   overflow-x: hidden;
@@ -164,24 +193,246 @@ a:hover .title { text-decoration: underline; }
   background: var(--bg);
 }
 
-.placeholder {
-  height: 100%;
+/* Section headers (active / context) */
+.section-header {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px 4px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--fg-muted);
+}
+.section-label { font-weight: 600; }
+
+/* ---------- Active jobs panel ---------- */
+.active {
+  background: color-mix(in srgb, var(--accent) 5%, var(--bg));
+  border-bottom: 1px solid var(--border);
+}
+.active.hidden { display: none; }
+.active ul { list-style: none; margin: 0; padding: 0 0 6px; }
+
+.active-row {
+  display: grid;
+  grid-template-columns: 18px 1fr auto 22px;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  font-size: 12px;
+}
+.active-row + .active-row { border-top: 1px solid var(--border); }
+
+.active-kind {
+  width: 16px; height: 16px;
+  border-radius: 4px;
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: 9px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
   justify-content: center;
-  padding: 24px;
+  flex: 0 0 auto;
+}
+.active-kind.k-yandex { background: #ffdb4d; color: #2f2400; }
+.active-kind.k-yt { background: #ff4040; color: #fff; }
+
+.active-meta { min-width: 0; display: flex; flex-direction: column; }
+.active-title {
+  font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.active-sub {
+  font-size: 11px;
+  color: var(--fg-muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.active-stage {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  white-space: nowrap;
+}
+.active-stage.s-error { color: var(--danger); }
+.active-stage.s-done, .active-stage.s-skipped { color: var(--success); }
+
+.link-btn {
+  background: transparent;
+  border: 0;
+  color: var(--fg-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  font-weight: 600;
+  padding: 0;
+}
+.link-btn:hover { color: var(--danger); }
+
+/* ---------- Context section ---------- */
+.context {
+  background: var(--bg-soft);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 6px;
+}
+.context.hidden { display: none; }
+
+.context-body { padding: 0; }
+.context-body ul {
+  list-style: none; margin: 0; padding: 0;
+}
+
+/* The Yandex track context reuses the search-result row, but we want
+   it to feel distinct, so we suppress dividers between rows. */
+.context-body .result + .result { border-top: 0; }
+
+/* ---------- YouTube context card ---------- */
+.yt-context {
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  gap: 12px;
+  padding: 10px 14px 12px;
+}
+.yt-thumb {
+  display: block; width: 96px; height: 54px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--bg-elev);
+}
+.yt-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.yt-body { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.yt-title {
+  font-weight: 600;
+  font-size: 13px;
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.yt-sub {
+  font-size: 12px;
+  color: var(--fg-muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.yt-dot { opacity: 0.6; }
+.yt-actions {
+  display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px;
+  align-items: center;
+}
+.yt-video-row { display: flex; align-items: stretch; gap: 0; }
+.yt-quality {
+  height: 30px; padding: 0 8px;
+  border: 1px solid var(--border);
+  border-right: 0;
+  background: var(--bg-elev); color: var(--fg);
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+  font-family: inherit; font-size: 12px; font-weight: 600;
+  outline: none; cursor: pointer;
+}
+.yt-quality:focus { border-color: var(--accent); }
+.yt-video-row .yt-video {
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+/* ---------- Album / playlist collection ---------- */
+.collection-header {
+  display: grid;
+  grid-template-columns: 56px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px 8px;
+}
+.collection-cover {
+  width: 56px; height: 56px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--bg-elev);
+}
+.collection-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.collection-meta { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.collection-title {
+  font-weight: 700; font-size: 14px; line-height: 1.2;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.collection-sub {
+  font-size: 12px; color: var(--fg-muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.collection-actions {
+  display: flex; align-items: center; gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.collection-quality {
+  height: 26px; padding: 0 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-elev); color: var(--fg);
+  border-radius: var(--radius-sm);
+  font-family: inherit; font-size: 11px; font-weight: 600;
+  outline: none; cursor: pointer;
+}
+
+.collection-list {
+  list-style: none; margin: 0; padding: 0 0 6px;
+  max-height: 320px;
+  overflow-y: auto;
+  border-top: 1px solid var(--border);
+}
+.collection-row {
+  display: grid;
+  grid-template-columns: 24px 36px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 14px;
+}
+.collection-row + .collection-row { border-top: 1px solid var(--border); }
+.collection-row:hover { background: var(--bg); }
+.row-num {
+  color: var(--fg-muted);
+  font-size: 11px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.row-cover {
+  width: 36px; height: 36px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--bg-elev);
+}
+.row-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.row-meta { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.row-meta .title {
+  font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-size: 12px;
+}
+.row-meta .artists {
+  font-size: 11px;
+  color: var(--fg-muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* ---------- Search results ---------- */
+.results { padding: 0; }
+.placeholder {
+  padding: 32px 24px;
+  display: flex; align-items: center; justify-content: center;
 }
 .placeholder.hidden { display: none; }
-.hero { text-align: center; max-width: 320px; }
+.hero { text-align: center; max-width: 360px; }
 .hero img { opacity: 0.85; margin-bottom: 12px; }
 .hero-title { margin: 0; font-size: 15px; font-weight: 600; }
-.hero-sub { margin: 6px 0 0; color: var(--fg-muted); font-size: 12px; line-height: 1.5; }
-
-.results ul {
-  list-style: none;
-  margin: 0;
-  padding: 6px 0;
+.hero-sub {
+  margin: 6px 0 0; color: var(--fg-muted);
+  font-size: 12px; line-height: 1.5;
 }
+.results ul { list-style: none; margin: 0; padding: 6px 0; }
 
 .result {
   display: grid;
@@ -195,8 +446,7 @@ a:hover .title { text-decoration: underline; }
 .result + .result { border-top: 1px solid var(--border); }
 
 .cover {
-  width: 44px;
-  height: 44px;
+  width: 44px; height: 44px;
   border-radius: var(--radius-sm);
   overflow: hidden;
   background: var(--bg-soft);
@@ -204,28 +454,20 @@ a:hover .title { text-decoration: underline; }
 }
 .cover img {
   width: 100%; height: 100%; object-fit: cover; display: block;
-  background: var(--bg-soft);
 }
-
 .meta {
-  min-width: 0;       /* lets text-overflow:ellipsis work inside grid */
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+  min-width: 0;
+  display: flex; flex-direction: column; gap: 2px;
   cursor: pointer;
 }
-.title {
+.meta .title {
   font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.artists {
+.meta .artists {
   color: var(--fg-muted);
   font-size: 12px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .result.unavailable .meta { opacity: 0.45; }
 
@@ -251,6 +493,8 @@ a:hover .title { text-decoration: underline; }
 .btn:active { transform: translateY(1px); }
 .btn:disabled { opacity: 0.55; cursor: default; }
 
+.btn.small { height: 26px; padding: 4px 10px; font-size: 11px; }
+
 .btn.ghost {
   background: transparent;
   color: var(--fg);
@@ -258,9 +502,11 @@ a:hover .title { text-decoration: underline; }
 }
 .btn.ghost:hover { background: var(--bg-soft); }
 
-/* per-state styling for the row's download button */
+/* per-state styling for any download button */
 .dl[data-state="downloading"],
 .dl[data-state="converting"],
+.dl[data-state="exporting"],
+.dl[data-state="queued"],
 .dl[data-state="pending"] {
   background: var(--bg-soft);
   color: var(--fg);
@@ -270,6 +516,8 @@ a:hover .title { text-decoration: underline; }
 }
 .dl[data-state="downloading"]::after,
 .dl[data-state="converting"]::after,
+.dl[data-state="exporting"]::after,
+.dl[data-state="queued"]::after,
 .dl[data-state="pending"]::after {
   content: "";
   position: absolute;
@@ -297,6 +545,11 @@ a:hover .title { text-decoration: underline; }
   background: color-mix(in srgb, var(--danger) 16%, transparent);
   color: var(--danger);
 }
+.dl[data-state="cancelled"] {
+  background: color-mix(in srgb, var(--fg-muted) 18%, transparent);
+  color: var(--fg-muted);
+  cursor: default;
+}
 
 /* ---------- Footer ---------- */
 .footer {
@@ -317,148 +570,33 @@ a:hover .title { text-decoration: underline; }
 .status.muted { color: var(--fg-muted); }
 .status.ok { color: var(--success); }
 .status.err { color: var(--danger); }
+.muted { color: var(--fg-muted); }
 .hidden { display: none !important; }
 
-/* Scrollbar polish */
-.results::-webkit-scrollbar { width: 8px; }
-.results::-webkit-scrollbar-thumb {
-  background: color-mix(in srgb, var(--fg-muted) 30%, transparent);
-  border-radius: 4px;
-}
-.results::-webkit-scrollbar-thumb:hover {
-  background: color-mix(in srgb, var(--fg-muted) 55%, transparent);
-}
-
-
-/* ============================================================== */
-/* Context section (page-derived suggestions)                     */
-/* ============================================================== */
-
-.context {
-  flex: 0 0 auto;
-  background: var(--bg-soft);
-  border-bottom: 1px solid var(--border);
-  padding: 8px 0 6px;
-}
-.context.hidden { display: none; }
-
-.context-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 14px 4px;
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.6px;
-  color: var(--fg-muted);
-}
-
-.context-body { padding: 0; }
-
-/* The Yandex track context reuses the search-result row, but we want
-   it to feel distinct, so we suppress the divider and tighten padding. */
-.context-body ul {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-.context-body .result + .result { border-top: 0; }
-
-/* ---------- YouTube context card ---------- */
-
-.yt-context {
-  display: grid;
-  grid-template-columns: 96px 1fr;
-  gap: 12px;
-  padding: 10px 14px 12px;
-}
-
-.yt-thumb {
-  display: block;
-  width: 96px;
-  height: 54px;       /* 16:9 */
-  border-radius: var(--radius-sm);
-  overflow: hidden;
-  background: var(--bg-elev);
-}
-.yt-thumb img {
-  width: 100%; height: 100%;
-  object-fit: cover; display: block;
-}
-
-.yt-body { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
-.yt-title {
-  font-weight: 600;
-  font-size: 13px;
-  line-height: 1.3;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.yt-sub {
-  font-size: 12px;
-  color: var(--fg-muted);
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.yt-dot { opacity: 0.6; }
-.yt-duration { flex: 0 0 auto; }
-
-.yt-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 6px;
-  align-items: center;
-}
-.yt-video-row {
-  display: flex;
-  align-items: stretch;
-  gap: 0;
-  /* visually grouped: select + button look like one pill */
-}
-.yt-quality {
-  height: 30px;
-  padding: 0 8px;
-  border: 1px solid var(--border);
-  border-right: 0;
-  background: var(--bg-elev);
-  color: var(--fg);
-  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
-  font-family: inherit;
-  font-size: 12px;
-  font-weight: 600;
-  outline: none;
-  cursor: pointer;
-}
-.yt-quality:focus { border-color: var(--accent); }
-.yt-video-row .yt-video {
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-}
-
-/* ---------- Loading / error inside the context section ---------- */
-
+/* Spinner (loading) */
 .context-loading,
 .context-error {
-  display: flex;
-  align-items: center;
-  gap: 10px;
+  display: flex; align-items: center; gap: 10px;
   padding: 10px 14px 12px;
 }
 .spinner {
-  width: 14px;
-  height: 14px;
+  width: 14px; height: 14px;
   border-radius: 50%;
   border: 2px solid color-mix(in srgb, var(--fg-muted) 35%, transparent);
   border-top-color: var(--accent);
   animation: spin 0.8s linear infinite;
 }
-@keyframes spin {
-  to { transform: rotate(360deg); }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Scrollbar polish (also applies to the inner collection-list) */
+.scroll::-webkit-scrollbar,
+.collection-list::-webkit-scrollbar { width: 8px; }
+.scroll::-webkit-scrollbar-thumb,
+.collection-list::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--fg-muted) 30%, transparent);
+  border-radius: 4px;
+}
+.scroll::-webkit-scrollbar-thumb:hover,
+.collection-list::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--fg-muted) 55%, transparent);
 }

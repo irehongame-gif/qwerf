@@ -1,9 +1,10 @@
 # qwerf
 
 A small toolkit to mirror your Yandex.Music **"My Favorites"** to a local
-lossless ALAC (Apple-friendly) library, with on-demand search & download from
-a Chrome popup, plus context-aware **YouTube audio + video** downloads when
-you're on a YouTube tab.
+ALAC library that drops straight into Apple Music, with on-demand search &
+download from a Chrome popup, **YouTube + YouTube Music + YouTube Music
+playlists** support, and a queue + library-index that knows what you already
+have.
 
 The repo is a monorepo of three nested projects:
 
@@ -13,65 +14,82 @@ The repo is a monorepo of three nested projects:
 | `server/`     | Local listener for the Chrome extension  | `ymsync-server` (FastAPI, localhost)   |
 | `extension/`  | Chrome extension popup (MV3)             | Loaded unpacked into Chrome            |
 
-> Targeted at **macOS**. ffmpeg is required for FLAC → ALAC conversion and for
-> yt-dlp's audio/video post-processing. yt-dlp is a Python dependency of the
-> CLI package.
+> **macOS only.** The default export folder is the system "Automatically Add
+> to Music" inbox, and the conversion target is **ALAC m4a** so Apple Music
+> imports everything natively. ffmpeg is required.
 
 ---
 
-## Flow
-
-For every Yandex.Music track (whether triggered by `sync` or by the popup):
+## Flow per track
 
 ```
-Yandex.Music → Downloaded/<Artist - Title>.flac   (raw lossless, kept as backup)
-              → ffmpeg -c:a alac
-              → Exported/<Artist - Title>.m4a     (flat, no folders)
+        any source (Yandex / YouTube)
+                       │
+                       ▼
+         Downloaded/<Artist - Title>.<ext>     (raw, kept as backup)
+                       │
+                  detect codec
+                       │
+            already ALAC ──► copy bytes ─┐
+            something else ──► ffmpeg ───┤
+                                          ▼
+       ~/Music/Music/Media.localized/Automatically Add to Music.localized/
+                <Artist - Title>.m4a
+                       │
+                       ▼
+            Music.app picks it up
 ```
 
-For YouTube audio:
+If **Auto-import is off** (toggle in the popup or `--no-auto-import-to-music`
+during `init`), the pipeline stops after the Downloaded folder — nothing is
+converted, nothing is copied.
 
-```
-YouTube → Downloaded/<Channel - Title>.m4a       (yt-dlp + AAC postproc)
-        → Exported/<Channel - Title>.m4a         (copy / transmux to AAC m4a)
-```
+YouTube videos go to a separate `videos_dir` with a per-resolution filename
+tag (`<Channel - Title> [1080p].mp4`), so 720p and 1080p of the same video
+can coexist.
 
-For YouTube video:
+## Library-aware dedup
 
-```
-YouTube → videos_dir/<Channel - Title [<height>p]>.mp4
-```
+A SQLite index (`~/.local/share/ymsync/library.db`) maps every audio file's
+`(title, album, artists)` to its on-disk path + codec. Search hits, album
+tracks, and YouTube playlist entries each carry an `already_exported` flag
+the popup uses to render an "In library" badge **without** opening the file.
+The server warm-scans your Downloaded + Exported folders on startup so the
+cache is hot by the time you type into the search bar.
 
-If the target already exists, the track/video is skipped entirely.
+## Queue + rate limits
+
+The listener has two pools:
+
+* **Yandex.Music** — max 2 concurrent track downloads.
+* **YouTube / YouTube Music** — max 3 concurrent (audio or video).
+
+Beyond those caps everything queues. Closing the popup does **not** cancel
+in-flight jobs; reopen and you'll see them in the "Active downloads" panel
+with a per-row cancel button (or a "Cancel all").
 
 ## Quick start
 
 ```bash
-# 1. Install ffmpeg (macOS)
+# 1. Install ffmpeg
 brew install ffmpeg
 
 # 2. Install the CLI (pulls yt-dlp + yandex-music-* in)
-cd cli
-pip install -e .
+cd cli && pip install -e .
 
-# 3. Configure (token + folders, including the new videos folder)
-ymsync init
+# 3. Configure
+ymsync init           # token, folders, auto-import on/off
+ymsync index          # warm the SQLite library index from existing files
 
 # 4. Sync favorites
 ymsync sync
 
 # 5. (Optional) start the listener for the Chrome extension
-cd ../server
-pip install -e .
-ymsync-server      # http://127.0.0.1:8765
+cd ../server && pip install -e .
+ymsync-server
 ```
 
 Then load `extension/` as an unpacked extension at `chrome://extensions`.
-
-## Getting a Yandex token
-
-See <https://ym.marshal.dev/token/#implicit-oauth>. Drop the resulting token
-into the config (or set `YMSYNC_TOKEN` env var).
 
 ## Project layout
 

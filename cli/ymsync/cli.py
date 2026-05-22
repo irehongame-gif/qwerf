@@ -4,7 +4,9 @@ Subcommands:
     init       – interactively write ~/.config/ymsync/config.toml
     sync       – mirror "My Favorites" to the local library
     download   – download a single track by id or URL
-    where      – print resolved download/export folders
+    where      – print resolved download/export folders + auto-import flag
+    index      – build/refresh the SQLite library index
+    yt         – yt-dlp powered helpers (audio / video / info / playlist)
 """
 
 from __future__ import annotations
@@ -29,6 +31,7 @@ from ymsync.config import (
 )
 from ymsync.converter import ensure_ffmpeg
 from ymsync.library import fetch_track, list_liked_tracks
+from ymsync.library_index import KIND_DOWNLOADED, KIND_EXPORTED, LibraryIndex
 from ymsync.naming import track_stem
 from ymsync.pipeline import TrackResult, TrackStage, process_track
 
@@ -52,20 +55,33 @@ def _extract_track_id(value: str) -> str:
 def _format_stage(result: TrackResult) -> str:
     icon = {
         TrackStage.PENDING: "·",
+        TrackStage.QUEUED: "·",
         TrackStage.DOWNLOADING: "↓",
         TrackStage.CONVERTING: "→",
+        TrackStage.EXPORTING: "↦",
         TrackStage.DONE: "✓",
         TrackStage.SKIPPED: "=",
         TrackStage.ERROR: "✗",
-    }[result.stage]
+        TrackStage.CANCELLED: "⊘",
+    }.get(result.stage, "·")
     label = result.stage.value
     return f"[{icon}] {label:<11} {result.stem}"
+
+
+def _open_index(cfg: Config) -> LibraryIndex:
+    """Open the on-disk library index. Cheap; does no scanning."""
+    return LibraryIndex(cfg.db_path)
 
 
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
 @click.version_option(package_name="ymsync")
 def main() -> None:
     """Sync Yandex.Music \"My Favorites\" to a local lossless ALAC library."""
+
+
+# ---------------------------------------------------------------------------
+# init / where / index
+# ---------------------------------------------------------------------------
 
 
 @main.command()
@@ -79,7 +95,7 @@ def main() -> None:
 @click.option(
     "--export-dir",
     default=str(DEFAULT_EXPORT_DIR),
-    prompt="Exported folder (ALAC m4a, flat)",
+    prompt="Exported folder (ALAC m4a, flat) — defaults to Music.app auto-import inbox",
     type=click.Path(),
 )
 @click.option(
@@ -94,20 +110,27 @@ def main() -> None:
     type=click.Choice(["lossless", "normal", "low"], case_sensitive=False),
     prompt="Yandex.Music audio quality",
 )
+@click.option(
+    "--auto-import-to-music/--no-auto-import-to-music",
+    default=True,
+    prompt="Auto-import every download into Apple Music?",
+)
 def init(
     token: str,
     download_dir: str,
     export_dir: str,
     videos_dir: str,
     quality: str,
+    auto_import_to_music: bool,
 ) -> None:
-    """Write the config file (token + folders + quality)."""
+    """Write the config file (token + folders + quality + Music.app toggle)."""
     cfg = Config(
         token=token.strip(),
         download_dir=Path(download_dir),
         export_dir=Path(export_dir),
         videos_dir=Path(videos_dir),
         quality=quality.lower(),
+        auto_import_to_music=auto_import_to_music,
     )
     cfg.ensure_dirs()
     path = write_config(cfg)
@@ -120,15 +143,76 @@ def init(
 
 @main.command(name="where")
 def where_cmd() -> None:
-    """Print resolved download/export folders and the config file path."""
+    """Print resolved download/export folders, db path, and auto-import flag."""
     try:
         cfg = load_config()
     except ConfigError as exc:
         raise click.ClickException(str(exc)) from exc
-    click.echo(f"config:     {CONFIG_FILE}")
-    click.echo(f"downloaded: {cfg.download_dir}")
-    click.echo(f"exported:   {cfg.export_dir}")
-    click.echo(f"videos:     {cfg.videos_dir}")
+    click.echo(f"config:        {CONFIG_FILE}")
+    click.echo(f"library db:    {cfg.db_path}")
+    click.echo(f"downloaded:    {cfg.download_dir}")
+    click.echo(f"exported:      {cfg.export_dir}")
+    click.echo(f"videos:        {cfg.videos_dir}")
+    click.echo(
+        f"auto-import:   {'on' if cfg.auto_import_to_music else 'off'} "
+        f"(Apple Music)"
+    )
+
+
+@main.command(name="index")
+@click.option(
+    "--rescan/--incremental",
+    default=False,
+    help="--rescan reads every file from scratch; default skips unchanged files.",
+)
+@click.option(
+    "--parallel", type=int, default=4, show_default=True,
+    help="Worker threads for tag-reading.",
+)
+def index_cmd(rescan: bool, parallel: int) -> None:
+    """Build / refresh the SQLite library index from on-disk files.
+
+    The server scans automatically on startup; you only need this command if
+    you've manually moved files around and want to refresh without a restart.
+    """
+    try:
+        cfg = load_config()
+    except ConfigError as exc:
+        raise click.ClickException(str(exc)) from exc
+    cfg.ensure_dirs()
+    idx = _open_index(cfg)
+
+    if rescan:
+        # Drop everything; the next scan will repopulate.
+        for row in idx.all_rows():
+            idx.remove_file(row.path)
+
+    targets = [(cfg.download_dir, KIND_DOWNLOADED)]
+    if cfg.auto_import_to_music and cfg.export_dir.is_dir():
+        targets.append((cfg.export_dir, KIND_EXPORTED))
+
+    for directory, kind in targets:
+        click.secho(f"Scanning {directory} as {kind}…", fg="cyan")
+        result = idx.scan_directory(directory, kind, parallel=parallel)
+        click.echo(
+            f"  scanned={result.scanned} "
+            f"new={result.inserted} "
+            f"updated={result.updated} "
+            f"unchanged={result.unchanged} "
+            f"removed={result.removed}"
+        )
+        for err in result.errors[:10]:
+            click.secho(f"  warning: {err}", fg="yellow", err=True)
+
+    removed = idx.verify_existence()
+    if removed:
+        click.secho(f"Pruned {removed} stale row(s).", fg="cyan")
+    click.secho("Done.", fg="green")
+
+
+# ---------------------------------------------------------------------------
+# sync / download
+# ---------------------------------------------------------------------------
 
 
 @main.command()
@@ -141,38 +225,44 @@ def sync(limit: Optional[int], dry_run: bool) -> None:
     except ConfigError as exc:
         raise click.ClickException(str(exc)) from exc
     cfg.ensure_dirs()
-    ensure_ffmpeg(cfg.ffmpeg_path)
+    if cfg.auto_import_to_music:
+        ensure_ffmpeg(cfg.ffmpeg_path)
+    idx = _open_index(cfg)
 
     client = build_client(cfg.token)
     click.secho("Fetching liked tracks…", fg="cyan")
     tracks = list_liked_tracks(client, limit=limit)
     click.secho(f"Found {len(tracks)} liked track(s).", fg="cyan")
 
-    counts = {"done": 0, "skipped": 0, "error": 0}
+    counts = {"done": 0, "skipped": 0, "error": 0, "cancelled": 0}
 
-    for idx, track in enumerate(tracks, 1):
+    for n, track in enumerate(tracks, 1):
         stem = track_stem(track)
-        prefix = f"({idx}/{len(tracks)})"
+        prefix = f"({n}/{len(tracks)})"
         if dry_run:
             click.echo(f"{prefix} would process  {stem}")
             continue
 
         def _progress(r: TrackResult, _prefix: str = prefix) -> None:
-            # Live status line per track, overwritten as stage advances.
             click.echo(f"{_prefix} {_format_stage(r)}")
 
-        result = process_track(track, cfg, on_progress=_progress)
+        result = process_track(
+            track, cfg, library_index=idx, on_progress=_progress,
+        )
         if result.stage == TrackStage.DONE:
             counts["done"] += 1
         elif result.stage == TrackStage.SKIPPED:
             counts["skipped"] += 1
+        elif result.stage == TrackStage.CANCELLED:
+            counts["cancelled"] += 1
         elif result.stage == TrackStage.ERROR:
             counts["error"] += 1
             click.secho(f"    error: {result.error}", fg="red", err=True)
 
     click.echo()
     click.secho(
-        f"done: {counts['done']}  skipped: {counts['skipped']}  errors: {counts['error']}",
+        f"done: {counts['done']}  skipped: {counts['skipped']}  "
+        f"errors: {counts['error']}",
         fg="green" if counts["error"] == 0 else "yellow",
     )
     if counts["error"]:
@@ -188,7 +278,9 @@ def download(track: str) -> None:
     except ConfigError as exc:
         raise click.ClickException(str(exc)) from exc
     cfg.ensure_dirs()
-    ensure_ffmpeg(cfg.ffmpeg_path)
+    if cfg.auto_import_to_music:
+        ensure_ffmpeg(cfg.ffmpeg_path)
+    idx = _open_index(cfg)
 
     track_id = _extract_track_id(track)
     client = build_client(cfg.token)
@@ -197,11 +289,18 @@ def download(track: str) -> None:
     def _progress(r: TrackResult) -> None:
         click.echo(_format_stage(r))
 
-    result = process_track(full, cfg, on_progress=_progress)
+    result = process_track(full, cfg, library_index=idx, on_progress=_progress)
     if result.stage == TrackStage.ERROR:
         raise click.ClickException(result.error or "unknown error")
     if result.exported_path:
         click.secho(f"Exported: {result.exported_path}", fg="green")
+    elif result.downloaded_path:
+        click.secho(f"Downloaded: {result.downloaded_path}", fg="green")
+
+
+# ---------------------------------------------------------------------------
+# YouTube subcommands
+# ---------------------------------------------------------------------------
 
 
 @main.group("yt")
@@ -212,7 +311,7 @@ def yt_group() -> None:
 @yt_group.command("audio")
 @click.argument("url")
 def yt_audio(url: str) -> None:
-    """Download YouTube audio as AAC m4a into your library."""
+    """Download YouTube audio as ALAC m4a (or AAC m4a if auto-import is off)."""
     from ymsync.youtube import download_audio
 
     try:
@@ -220,16 +319,22 @@ def yt_audio(url: str) -> None:
     except ConfigError as exc:
         raise click.ClickException(str(exc)) from exc
     cfg.ensure_dirs()
-    ensure_ffmpeg(cfg.ffmpeg_path)
+    if cfg.auto_import_to_music:
+        ensure_ffmpeg(cfg.ffmpeg_path)
+    idx = _open_index(cfg)
 
     def _progress(r: TrackResult) -> None:
         click.echo(_format_stage(r))
 
-    result = download_audio(url, cfg, on_progress=_progress)
+    result = download_audio(
+        url, cfg, library_index=idx, on_progress=_progress,
+    )
     if result.stage == TrackStage.ERROR:
         raise click.ClickException(result.error or "unknown error")
     if result.exported_path:
         click.secho(f"Exported: {result.exported_path}", fg="green")
+    elif result.downloaded_path:
+        click.secho(f"Downloaded: {result.downloaded_path}", fg="green")
 
 
 @yt_group.command("video")
@@ -268,17 +373,44 @@ def yt_info(url: str) -> None:
     """Print metadata + available video heights for a YouTube URL."""
     from ymsync.youtube import fetch_info
 
+    cfg = None
     try:
         cfg = load_config()
     except ConfigError:
-        cfg = None
+        pass
     info = fetch_info(url, cfg)
     click.echo(f"title:    {info.title}")
     click.echo(f"channel:  {info.channel}")
     click.echo(f"duration: {info.duration_s}s")
-    click.echo(f"heights:  {', '.join(f'{h}p' for h in info.available_heights) or '-'}")
+    click.echo(
+        f"heights:  {', '.join(f'{h}p' for h in info.available_heights) or '-'}"
+    )
     if info.audio_already_exported:
-        click.secho("audio:    already exported", fg="green")
+        click.secho("audio:    already in library", fg="green")
+
+
+@yt_group.command("playlist")
+@click.argument("url")
+def yt_playlist(url: str) -> None:
+    """Print the contents of a YouTube / YouTube Music playlist."""
+    from ymsync.youtube import fetch_playlist
+
+    cfg = None
+    idx = None
+    try:
+        cfg = load_config()
+        idx = _open_index(cfg)
+    except ConfigError:
+        pass
+    info = fetch_playlist(url, cfg, library_index=idx)
+    click.echo(f"playlist: {info.title}")
+    click.echo(f"uploader: {info.uploader or '-'}")
+    click.echo(f"entries:  {info.entry_count}")
+    click.echo()
+    for n, e in enumerate(info.entries, 1):
+        flag = "✓" if e.audio_already_exported else " "
+        dur = f"{e.duration_s}s" if e.duration_s else " -"
+        click.echo(f"{flag} {n:>3}. {e.title}  ({e.channel or '?'}, {dur})")
 
 
 if __name__ == "__main__":
