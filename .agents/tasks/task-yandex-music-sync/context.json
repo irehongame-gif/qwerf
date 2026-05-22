@@ -1,0 +1,22 @@
+{
+  "project_type": "Python CLI tool for syncing Yandex Music favorites and converting to ALAC",
+  "language": "Python",
+  "build_system": "pip with pyproject.toml (setuptools backend)",
+  "test_framework": "Manual verification (no test suite required for this greenfield CLI tool)",
+  "build_command": "pip install -e . (in /projects/sandbox/qwerf/)",
+  "test_command": "python -m ym_sync --help",
+  "verification_instructions": "1. pip install -e . succeeds without errors. 2. python -m ym_sync --help shows usage. 3. Code imports resolve correctly.",
+  "snapshot_or_generated_files": null,
+  "setup_instructions": "pip install -e . from project root",
+  "environment_constraints": "Python 3.9.25 available (not 3.11 as initially stated). ffmpeg is NOT installed - the tool should gracefully handle missing ffmpeg at runtime. Network is OPEN_INTERNET so pip install works.",
+  "contribution_requirements": "None - greenfield project",
+  "key_patterns": "Reference code at /projects/sandbox/ymd-ref/ provides patterns for: API auth (core.init_client), fetching favorites (client.users_likes_tracks()), downloading tracks (api.get_download_info + api.download_track), tagging (core.set_tags with mutagen), path building. The CLI tool vendors the needed download/decrypt logic from the reference.",
+  "relevant_files": [
+    "/projects/sandbox/ymd-ref/ymd/api.py",
+    "/projects/sandbox/ymd-ref/ymd/core.py",
+    "/projects/sandbox/ymd-ref/ymd/cli.py",
+    "/projects/sandbox/ymd-ref/ymd/mime_utils.py",
+    "/projects/sandbox/ymd-ref/ymd/text_utils.py"
+  ],
+  "directory_structure": "Target structure: /projects/sandbox/qwerf/ with pyproject.toml, README.md, and ym_sync/ package containing __init__.py, __main__.py, cli.py, api.py, downloader.py, converter.py"
+}

@@ -1,0 +1,268 @@
+"""CLI entry point for ym-sync."""
+
+import argparse
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+from ym_sync.client import init_client
+from ym_sync.converter import (
+    FfmpegNotFoundError,
+    convert_flac_to_alac,
+    copy_to_exported,
+)
+from ym_sync.downloader import (
+    build_filename,
+    download_track,
+    fetch_favorites,
+)
+from ym_sync.sync_state import load_state, save_state
+
+
+def get_token(args_token: str = None) -> str:
+    """Resolve the authentication token from args, env var, or config file.
+
+    Priority: --token arg > YM_TOKEN env var > ~/.ym_sync_token file.
+
+    Returns:
+        The token string.
+
+    Raises:
+        SystemExit: If no token can be found.
+    """
+    if args_token:
+        return args_token
+
+    env_token = os.environ.get("YM_TOKEN")
+    if env_token:
+        return env_token
+
+    token_file = Path.home() / ".ym_sync_token"
+    if token_file.is_file():
+        token = token_file.read_text(encoding="utf-8").strip()
+        if token:
+            return token
+
+    print("Error: No token provided.", file=sys.stderr)
+    print(
+        "Provide a token via --token, YM_TOKEN env var, or ~/.ym_sync_token file.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+
+def main():
+    """Main CLI entry point."""
+    parser = argparse.ArgumentParser(
+        prog="ym-sync",
+        description=(
+            "Sync Yandex Music favorites as .m4a files (lossless FLAC-in-MP4 "
+            "or AAC-in-MP4, both native macOS playback)"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+
+    parser.add_argument(
+        "--token",
+        metavar="TOKEN",
+        default=None,
+        help="Yandex Music OAuth token (or set YM_TOKEN env var, or ~/.ym_sync_token)",
+    )
+    parser.add_argument(
+        "--output-dir",
+        metavar="DIR",
+        default=".",
+        help="Output directory (default: current directory)",
+    )
+    parser.add_argument(
+        "--delay",
+        metavar="SECONDS",
+        type=float,
+        default=1.0,
+        help="Delay between downloads in seconds (default: 1)",
+    )
+    parser.add_argument(
+        "--timeout",
+        metavar="SECONDS",
+        type=int,
+        default=20,
+        help="Request timeout in seconds (default: 20)",
+    )
+    parser.add_argument(
+        "--max-retries",
+        metavar="N",
+        type=int,
+        default=20,
+        help="Max retries on network error (default: 20, 0=infinite)",
+    )
+    parser.add_argument(
+        "--retry-delay",
+        metavar="SECONDS",
+        type=int,
+        default=5,
+        help="Delay between retries in seconds (default: 5)",
+    )
+    parser.add_argument(
+        "--download-only",
+        action="store_true",
+        help="Only download files, skip copying to Exported folder",
+    )
+
+    args = parser.parse_args()
+
+    token = get_token(args.token)
+
+    output_dir = Path(args.output_dir)
+    downloaded_dir = output_dir / "Downloaded"
+    exported_dir = output_dir / "Exported"
+    state_path = output_dir / ".sync_state.json"
+
+    # Load existing sync state
+    state = load_state(state_path)
+
+    # Initialize client
+    print("Initializing Yandex Music client...")
+    try:
+        client = init_client(
+            token=token,
+            timeout=args.timeout,
+            max_retries=args.max_retries,
+            retry_delay=args.retry_delay,
+        )
+    except Exception as e:
+        print(f"Error: Failed to initialize client: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Fetch favorites
+    print("Fetching favorite tracks...")
+    try:
+        tracks = fetch_favorites(client)
+    except Exception as e:
+        print(f"Error: Failed to fetch favorites: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if not tracks:
+        print("No favorite tracks found.")
+        return
+
+    total = len(tracks)
+    print(f"Found {total} favorite track(s).")
+
+    # Process each track
+    downloaded_count = 0
+    skipped_count = 0
+    error_count = 0
+
+    for i, track in enumerate(tracks, 1):
+        track_id = str(track.id)
+        filename = build_filename(track, track_id)
+
+        # Check existing state
+        existing = state.get(track_id)
+
+        # If already exported, skip entirely
+        if existing and existing.get("status") == "exported":
+            skipped_count += 1
+            continue
+
+        # If downloaded but not exported, try to export
+        if existing and existing.get("status") == "downloaded":
+            if args.download_only:
+                skipped_count += 1
+                continue
+            # Try to export the previously downloaded file
+            downloaded_filename = existing.get("filename", filename)
+            downloaded_ext = existing.get("extension", ".m4a")
+            src_path = downloaded_dir / f"{downloaded_filename}{downloaded_ext}"
+            if src_path.is_file():
+                print(f"[{i}/{total}] Exporting: {downloaded_filename}")
+                try:
+                    if downloaded_ext == ".flac":
+                        exported_path = convert_flac_to_alac(src_path, exported_dir)
+                    else:
+                        exported_path = copy_to_exported(src_path, exported_dir)
+                    state[track_id]["status"] = "exported"
+                    save_state(state_path, state)
+                    print(f"  Exported: {exported_path.name}")
+                    downloaded_count += 1
+                except FfmpegNotFoundError:
+                    print(
+                        "  Warning: ffmpeg not found, cannot convert raw FLAC.",
+                        file=sys.stderr,
+                    )
+                except subprocess.CalledProcessError as e:
+                    stderr_output = e.stderr.decode() if e.stderr else ""
+                    print(f"  Warning: Conversion failed: {e}", file=sys.stderr)
+                    if stderr_output:
+                        print(f"  ffmpeg stderr: {stderr_output}", file=sys.stderr)
+                except Exception as e:
+                    print(f"  Warning: Export failed: {e}", file=sys.stderr)
+                continue
+            # Source file missing, fall through to re-download
+
+        if not track.available:
+            print(f"[{i}/{total}] Skipping (unavailable): {filename}")
+            error_count += 1
+            continue
+
+        print(f"[{i}/{total}] Downloading: {filename}")
+
+        try:
+            result = download_track(
+                client=client,
+                track=track,
+                downloaded_dir=downloaded_dir,
+                delay=args.delay,
+            )
+        except Exception as e:
+            print(f"  Warning: Failed to download: {e}", file=sys.stderr)
+            error_count += 1
+            continue
+
+        # Determine extension from what was actually saved
+        ext = result.path.suffix
+
+        # Update state as downloaded
+        state[track_id] = {
+            "filename": filename,
+            "extension": ext,
+            "status": "downloaded",
+        }
+        save_state(state_path, state)
+
+        # Export unless download-only mode
+        if not args.download_only:
+            try:
+                if result.needs_conversion:
+                    exported_path = convert_flac_to_alac(result.path, exported_dir)
+                else:
+                    exported_path = copy_to_exported(result.path, exported_dir)
+                state[track_id]["status"] = "exported"
+                save_state(state_path, state)
+                print(f"  Exported: {exported_path.name}")
+            except FfmpegNotFoundError:
+                print(
+                    "  Warning: ffmpeg not found, cannot convert raw FLAC.",
+                    file=sys.stderr,
+                )
+                print(
+                    "  Install ffmpeg to enable conversion. File saved in Downloaded/.",
+                    file=sys.stderr,
+                )
+            except subprocess.CalledProcessError as e:
+                stderr_output = e.stderr.decode() if e.stderr else ""
+                print(f"  Warning: Conversion failed: {e}", file=sys.stderr)
+                if stderr_output:
+                    print(f"  ffmpeg stderr: {stderr_output}", file=sys.stderr)
+            except Exception as e:
+                print(f"  Warning: Export failed: {e}", file=sys.stderr)
+
+        downloaded_count += 1
+
+    print(f"\nSync complete: {downloaded_count} processed, "
+          f"{skipped_count} skipped (already synced), {error_count} errors.")
+
+
+if __name__ == "__main__":
+    main()
