@@ -2,6 +2,7 @@
 
 import argparse
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -11,7 +12,6 @@ from ym_sync.downloader import (
     build_filename,
     download_track_flac,
     fetch_favorites,
-    is_track_in_state,
 )
 from ym_sync.sync_state import load_state, save_state
 
@@ -149,11 +149,86 @@ def main():
 
     for i, track in enumerate(tracks, 1):
         track_id = str(track.id)
-        filename = build_filename(track)
+        filename = build_filename(track, track_id)
 
-        # Skip if already in state
-        if is_track_in_state(track_id, state):
+        # Check existing state
+        existing = state.get(track_id)
+
+        # If already exported, skip entirely
+        if existing and existing.get("status") == "exported":
             skipped_count += 1
+            continue
+
+        # If downloaded but not exported, retry conversion (unless download-only)
+        if existing and existing.get("status") == "downloaded":
+            if args.download_only:
+                skipped_count += 1
+                continue
+            # Attempt to convert the previously downloaded file
+            downloaded_filename = existing.get("filename", filename)
+            flac_path = downloaded_dir / f"{downloaded_filename}.flac"
+            if flac_path.is_file():
+                print(f"[{i}/{total}] Retrying conversion: {downloaded_filename}")
+                try:
+                    alac_path = convert_to_alac(flac_path, exported_dir)
+                    state[track_id]["status"] = "exported"
+                    save_state(state_path, state)
+                    print(f"  Exported: {alac_path.name}")
+                    downloaded_count += 1
+                except FfmpegNotFoundError:
+                    print(
+                        "  Warning: ffmpeg not found, skipping ALAC conversion.",
+                        file=sys.stderr,
+                    )
+                    print(
+                        "  Install ffmpeg to enable conversion. FLAC file was saved.",
+                        file=sys.stderr,
+                    )
+                except subprocess.CalledProcessError as e:
+                    stderr_output = e.stderr.decode() if e.stderr else ""
+                    print(f"  Warning: Conversion failed: {e}", file=sys.stderr)
+                    if stderr_output:
+                        print(f"  ffmpeg stderr: {stderr_output}", file=sys.stderr)
+                except Exception as e:
+                    print(f"  Warning: Conversion failed: {e}", file=sys.stderr)
+            else:
+                # FLAC file missing, re-download
+                print(f"[{i}/{total}] Re-downloading (FLAC missing): {filename}")
+                if not track.available:
+                    print(f"  Skipping (unavailable): {filename}")
+                    error_count += 1
+                    continue
+                try:
+                    flac_path = download_track_flac(
+                        client=client,
+                        track=track,
+                        downloaded_dir=downloaded_dir,
+                        delay=args.delay,
+                    )
+                except Exception as e:
+                    print(f"  Warning: Failed to download: {e}", file=sys.stderr)
+                    error_count += 1
+                    continue
+                state[track_id] = {"filename": filename, "status": "downloaded"}
+                save_state(state_path, state)
+                try:
+                    alac_path = convert_to_alac(flac_path, exported_dir)
+                    state[track_id]["status"] = "exported"
+                    save_state(state_path, state)
+                    print(f"  Exported: {alac_path.name}")
+                except FfmpegNotFoundError:
+                    print(
+                        "  Warning: ffmpeg not found, skipping ALAC conversion.",
+                        file=sys.stderr,
+                    )
+                except subprocess.CalledProcessError as e:
+                    stderr_output = e.stderr.decode() if e.stderr else ""
+                    print(f"  Warning: Conversion failed: {e}", file=sys.stderr)
+                    if stderr_output:
+                        print(f"  ffmpeg stderr: {stderr_output}", file=sys.stderr)
+                except Exception as e:
+                    print(f"  Warning: Conversion failed: {e}", file=sys.stderr)
+                downloaded_count += 1
             continue
 
         if not track.available:
@@ -195,6 +270,11 @@ def main():
                     "  Install ffmpeg to enable conversion. FLAC file was saved.",
                     file=sys.stderr,
                 )
+            except subprocess.CalledProcessError as e:
+                stderr_output = e.stderr.decode() if e.stderr else ""
+                print(f"  Warning: Conversion failed: {e}", file=sys.stderr)
+                if stderr_output:
+                    print(f"  ffmpeg stderr: {stderr_output}", file=sys.stderr)
             except Exception as e:
                 print(f"  Warning: Conversion failed: {e}", file=sys.stderr)
 

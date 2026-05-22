@@ -12,6 +12,7 @@ import time
 import typing
 from dataclasses import dataclass
 from enum import Enum, auto
+from typing import Optional
 
 from Crypto.Cipher import AES
 from strenum import StrEnum
@@ -59,7 +60,7 @@ class CustomDownloadInfo:
     quality: str
     file_format: FileFormat
     urls: list
-    decryption_key: str
+    decryption_key: Optional[str]
     bitrate: int
 
 

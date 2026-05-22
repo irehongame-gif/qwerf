@@ -55,13 +55,16 @@ def sanitize_filename(name: str) -> str:
     return sanitized
 
 
-def build_filename(track: Track) -> str:
+def build_filename(track: Track, track_id: str = None) -> str:
     """Build a sanitized filename from track metadata.
 
-    Format: "Artist - Title" (multiple artists joined by ", ").
+    Format: "Artist - Title [track_id]" (multiple artists joined by ", ").
+    The track ID suffix prevents filename collisions when different tracks
+    share the same artist/title combination.
 
     Args:
         track: Full Track object.
+        track_id: Track ID to include as suffix. If None, uses track.id.
 
     Returns:
         Sanitized filename string (without extension).
@@ -75,7 +78,8 @@ def build_filename(track: Track) -> str:
     artist_str = ", ".join(artists) if artists else "Unknown Artist"
     title = track.title or "Unknown Title"
 
-    filename = f"{artist_str} - {title}"
+    tid = track_id if track_id is not None else str(track.id)
+    filename = f"{artist_str} - {title} [{tid}]"
     return sanitize_filename(filename)
 
 
