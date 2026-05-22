@@ -8,8 +8,21 @@ codec inside the source file (not the file extension) and either:
 * copies the bytes verbatim when the source is already ALAC, or
 * re-encodes to ALAC, copying any embedded cover art stream as-is.
 
-Both ``flac_to_alac`` and ``to_aac_m4a`` are kept as thin wrappers for
-backward compatibility but new code should reach for :func:`to_alac`.
+About atomic writes
+-------------------
+We land on a sibling temp file first and rename on success, so a crashed
+ffmpeg can never leave a half-written file the library index would mistake
+for "already exported". Two small but important details:
+
+* The temp filename keeps the **real** ``.m4a`` suffix and gets a leading
+  ``.`` plus a ``qwerf-tmp`` token (e.g. ``.Foo.qwerf-tmp.m4a``). The
+  leading dot hides it from Finder and from Music.app's auto-import scanner
+  (Music.app skips dotfiles in its watch folder), and the preserved
+  ``.m4a`` extension means ffmpeg doesn't have to guess the muxer.
+
+* We *also* pass ``-f mp4`` explicitly to ffmpeg, so the output muxer is
+  pinned regardless of filename. Belt + suspenders — if a future filename
+  scheme ever hides the extension again, the conversion still works.
 """
 
 from __future__ import annotations
@@ -58,9 +71,10 @@ def to_alac(
     * Otherwise re-encodes to ALAC. Any embedded cover stream is copied
       as-is (``-c:v copy``) so artwork survives the trip into Music.app.
 
-    The write is atomic — we land on ``dst.part`` first and rename on
-    success, so a crashed run never leaves a half-written file that the
-    library index would mistake for "already exported".
+    The write is atomic — we land on a hidden ``.<name>.qwerf-tmp.m4a``
+    sibling first and rename on success, so a crashed run never leaves a
+    half-written file that the library index would mistake for "already
+    exported".
 
     Parameters
     ----------
@@ -76,7 +90,7 @@ def to_alac(
     codec = (codec_hint or detect_codec(src)).lower()
 
     dst.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dst.with_name(dst.name + ".part")
+    tmp = _tmp_path_for(dst)
     if tmp.exists():
         tmp.unlink()
 
@@ -108,6 +122,18 @@ def to_alac(
         raise
 
 
+def _tmp_path_for(dst: Path) -> Path:
+    """Return a hidden sibling temp path that preserves ``dst``'s extension.
+
+    Example: ``Foo.m4a`` → ``.Foo.qwerf-tmp.m4a``. The leading dot hides
+    the file from Finder and from Music.app's auto-import scanner (which
+    skips dotfiles in its watch folder), and the kept ``.m4a`` extension
+    lets ffmpeg infer the muxer from the path.
+    """
+    stem, suffix = dst.stem, dst.suffix
+    return dst.with_name(f".{stem}.qwerf-tmp{suffix}")
+
+
 def _build_alac_cmd(
     ffmpeg_path: str, src: Path, tmp: Path, codec: str
 ) -> list[str]:
@@ -127,10 +153,14 @@ def _build_alac_cmd(
     #   with the m4a 'covr' atom when copied.
     # * Lossy MP3 / AAC sources we re-encode into ALAC; copy the cover too.
     # * For unknown codecs just play it safe: only map audio.
+    #
+    # ``-f mp4`` pins the output muxer explicitly so we don't depend on
+    # ffmpeg's filename-extension sniffing — see module docstring.
     if codec == CODEC_UNKNOWN:
         cmd = base + [
             "-map", "0:a",
             "-c:a", "alac",
+            "-f", "mp4",
             "-movflags", "+faststart",
             str(tmp),
         ]
@@ -139,6 +169,7 @@ def _build_alac_cmd(
             "-map", "0",
             "-c:a", "alac",
             "-c:v", "copy",
+            "-f", "mp4",
             "-movflags", "+faststart",
             str(tmp),
         ]
@@ -198,7 +229,7 @@ def to_aac_m4a(
         return dst
 
     dst.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dst.with_name(dst.name + ".part")
+    tmp = _tmp_path_for(dst)
     if tmp.exists():
         tmp.unlink()
 
@@ -211,6 +242,7 @@ def to_aac_m4a(
         "-vn",
         "-c:a", "aac",
         "-b:a", bitrate,
+        "-f", "mp4",
         "-movflags", "+faststart",
         str(tmp),
     ]
