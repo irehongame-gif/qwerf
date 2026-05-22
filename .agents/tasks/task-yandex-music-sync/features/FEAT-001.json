@@ -1,0 +1,37 @@
+{
+  "id": "FEAT-001",
+  "type": "feat",
+  "description": "Create the complete ym_sync CLI tool: project structure, API integration, download logic, FLAC-to-ALAC conversion, and incremental sync workflow",
+  "status": "in_progress",
+  "steps": [
+    "Create /projects/sandbox/qwerf/pyproject.toml with: name='ym-sync', dependencies=['yandex-music>=3.0.0', 'mutagen>=1.47.0', 'StrEnum', 'pycryptodome'], entry point 'ym-sync = ym_sync.cli:main', and [project.scripts] section. Use setuptools as build backend.",
+    "Create /projects/sandbox/qwerf/ym_sync/__init__.py (empty or with version string)",
+    "Create /projects/sandbox/qwerf/ym_sync/__main__.py that calls cli.main() so 'python -m ym_sync' works",
+    "Create /projects/sandbox/qwerf/ym_sync/api.py - vendor the download API logic from /projects/sandbox/ymd-ref/ymd/api.py. Include: Container/Codec/FileFormat enums and dataclasses, ApiTrackQuality enum, CustomDownloadInfo dataclass, get_download_info() function, download_track() function, decrypt_data() function. Keep the same logic but ensure it works standalone.",
+    "Create /projects/sandbox/qwerf/ym_sync/client.py - client initialization: init_client(token, timeout, max_retries, retry_delay) following the pattern from /projects/sandbox/ymd-ref/ymd/core.py (the retry wrapper around client.request._request_wrapper). Return Client object after .init().",
+    "Create /projects/sandbox/qwerf/ym_sync/downloader.py - the main sync/download logic: (1) fetch_favorites(client) - calls client.users_likes_tracks(), extracts track IDs, fetches full Track objects in batches via client.tracks([ids...]). (2) build_filename(track) - produces sanitized 'Artist - Title' string for filenames (handle multiple artists joined by ', '). (3) is_track_downloaded(track, downloaded_dir, exported_dir) - checks if track already exists locally by looking for files matching the track ID or filename pattern in both directories. Use a manifest/index file (.sync_state.json) in the project root to map track_id -> filename for reliable detection. (4) download_track_flac(client, track, downloaded_dir) - uses api.get_download_info with LOSSLESS quality, api.download_track to get bytes, writes FLAC to Downloaded/<Artist - Title>.flac, tags the file using mutagen (title, artist, album, track number, year). Returns the path to the downloaded file.",
+    "Create /projects/sandbox/qwerf/ym_sync/converter.py - FLAC to ALAC conversion: convert_to_alac(flac_path, exported_dir) - shells out to 'ffmpeg -i <input.flac> -acodec alac <output.m4a>' placing the result in the Exported folder with flat naming (Artist - Title.m4a). Should check if ffmpeg is available first and raise a clear error if not. Return the output path.",
+    "Create /projects/sandbox/qwerf/ym_sync/sync_state.py - state management: load_state(state_path) and save_state(state_path, state_dict). The state is a JSON file mapping track_id (str) -> {filename, status} where status is 'downloaded' or 'exported'. This enables incremental sync detection without relying solely on filesystem checks.",
+    "Create /projects/sandbox/qwerf/ym_sync/cli.py - the CLI entry point using argparse: (1) 'sync' subcommand (or just default behavior) with args: --token (or env var YM_TOKEN or config file ~/.ym_sync_token), --output-dir (default '.'), --delay (default 1 second between downloads). (2) Main workflow: init client -> fetch favorites -> for each track not in local state, download FLAC to <output_dir>/Downloaded/, convert to ALAC in <output_dir>/Exported/, update state. (3) Progress output showing [N/total] status. (4) Error handling: skip tracks that fail download with a warning, continue with next.",
+    "Create /projects/sandbox/qwerf/README.md with usage instructions: installation (pip install -e . or pip install .), prerequisites (ffmpeg must be installed), how to get a Yandex Music token, example commands (ym-sync sync --token YOUR_TOKEN --output-dir ~/Music), folder structure explanation (Downloaded/ has FLAC, Exported/ has ALAC .m4a files flat).",
+    "Remove /projects/sandbox/qwerf/index.html as it's not part of this project"
+  ],
+  "acceptance_criteria": [
+    "pip install -e . in /projects/sandbox/qwerf/ succeeds without import errors",
+    "python -m ym_sync --help displays usage information with available arguments",
+    "ym-sync --help works as a CLI entry point after installation",
+    "The api.py module can be imported and contains get_download_info and download_track functions",
+    "The converter.py module contains convert_to_alac that would shell out to ffmpeg",
+    "The sync_state.py module provides load_state and save_state functions",
+    "The cli.py implements the full sync workflow: auth -> fetch favorites -> check state -> download FLAC -> convert ALAC -> update state",
+    "Downloaded files go to <output_dir>/Downloaded/ and exported files to <output_dir>/Exported/ (flat, no subfolders)",
+    "README.md explains installation and usage"
+  ],
+  "verification": [
+    "Run: pip install -e /projects/sandbox/qwerf/ and confirm exit code 0",
+    "Run: python -m ym_sync --help and confirm it shows usage",
+    "Run: python -c 'from ym_sync import api, client, downloader, converter, sync_state, cli' to confirm all modules import cleanly"
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}

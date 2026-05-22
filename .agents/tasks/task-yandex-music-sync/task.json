@@ -1,0 +1,7 @@
+{
+  "task_id": "task-yandex-music-sync",
+  "task_description": "Create a Python CLI tool (ym-sync) that syncs Yandex Music favorites, downloads tracks in FLAC (lossless), converts them to ALAC (.m4a) via ffmpeg, with incremental sync support. Downloaded FLACs go in 'Downloaded' folder, exported ALACs go flat in 'Exported' folder.",
+  "status": "in_progress",
+  "feature_order": ["FEAT-001"],
+  "blocked_reason": null
+}

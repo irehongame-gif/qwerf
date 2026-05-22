@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ym-sync"
+version = "0.1.0"
+description = "CLI tool for syncing Yandex Music favorites, downloading FLAC and converting to ALAC"
+requires-python = ">=3.9"
+dependencies = [
+    "yandex-music>=3.0.0",
+    "mutagen>=1.47.0",
+    "StrEnum",
+    "pycryptodome",
+]
+
+[project.scripts]
+ym-sync = "ym_sync.cli:main"
