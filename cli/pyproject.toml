@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ymsync"
+version = "0.1.0"
+description = "Sync Yandex.Music 'My Favorites' to a local lossless ALAC library"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "qwerf" }]
+license = { text = "MIT" }
+dependencies = [
+    "yandex-music>=2.2.0",
+    # The downloader is only on GitHub, install via:
+    #   pip install -U https://github.com/llistochek/yandex-music-downloader/archive/main.zip
+    # We list it here as a direct URL so `pip install -e .` pulls it in automatically.
+    "yandex-music-downloader @ https://github.com/llistochek/yandex-music-downloader/archive/main.zip",
+    "yt-dlp>=2024.5.0",
+    "click>=8.1",
+    "platformdirs>=4.0",
+    "tomli>=2.0; python_version < '3.11'",
+    "tomli-w>=1.0",
+]
+
+[project.scripts]
+ymsync = "ymsync.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["ymsync*"]

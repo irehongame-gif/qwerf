@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="color-scheme" content="light dark" />
+  <title>qwerf</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <img src="icons/icon32.png" alt="" width="20" height="20" />
+      <span>qwerf</span>
+    </div>
+    <div class="topbar-actions">
+      <label class="auto-toggle" id="auto-toggle" title="Auto-import every download into Apple Music">
+        <input id="auto-import" type="checkbox" />
+        <span class="toggle-track" aria-hidden="true"><span class="toggle-thumb"></span></span>
+        <span class="toggle-label">Auto-import</span>
+      </label>
+      <button id="settings-toggle" class="icon-btn" type="button" aria-label="Settings" title="Settings">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+          <path fill="currentColor" d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Zm9.4 4-2 .3-.4 1 1.2 1.6a.6.6 0 0 1-.1.8l-1.5 1.5a.6.6 0 0 1-.8.1L16.2 16l-1 .4-.3 2a.6.6 0 0 1-.6.5h-2.6a.6.6 0 0 1-.6-.5l-.3-2-1-.4-1.6 1.2a.6.6 0 0 1-.8-.1L5.9 15.6a.6.6 0 0 1-.1-.8L7 13.2l-.4-1-2-.3a.6.6 0 0 1-.5-.6V8.7a.6.6 0 0 1 .5-.6l2-.3.4-1L5.8 5.2a.6.6 0 0 1 .1-.8L7.4 2.9a.6.6 0 0 1 .8-.1L9.8 4l1-.4.3-2a.6.6 0 0 1 .6-.5h2.6a.6.6 0 0 1 .6.5l.3 2 1 .4 1.6-1.2a.6.6 0 0 1 .8.1l1.5 1.5a.6.6 0 0 1 .1.8L18.9 7l.4 1 2 .3a.6.6 0 0 1 .5.6v2.6a.6.6 0 0 1-.4.5Z"/>
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <div id="settings-panel" class="settings hidden">
+    <label class="field">
+      <span>Server URL</span>
+      <input id="server-url" type="url" placeholder="http://127.0.0.1:8765" />
+    </label>
+    <div class="row gap">
+      <button id="settings-test" class="btn ghost" type="button">Test connection</button>
+      <button id="settings-save" class="btn" type="button">Save</button>
+    </div>
+    <div id="settings-status" class="status muted" aria-live="polite"></div>
+  </div>
+
+  <form id="search-form" class="search">
+    <label class="search-input">
+      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+        <path fill="currentColor" d="M10 4a6 6 0 1 1-3.9 10.6l-3.3 3.3-1.4-1.4 3.3-3.3A6 6 0 0 1 10 4Zm0 2a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z"/>
+      </svg>
+      <input id="q" type="search" placeholder="Search Yandex.Music…" autocomplete="off" autofocus />
+      <button id="clear" type="button" class="icon-btn small hidden" aria-label="Clear">
+        <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+          <path fill="currentColor" d="M6.4 5 12 10.6 17.6 5 19 6.4 13.4 12 19 17.6 17.6 19 12 13.4 6.4 19 5 17.6 10.6 12 5 6.4Z"/>
+        </svg>
+      </button>
+    </label>
+  </form>
+
+  <main id="scroll" class="scroll" aria-live="polite">
+    <!-- Active jobs (in-flight downloads carrying over from previous popup session) -->
+    <section id="active" class="active hidden">
+      <header class="section-header">
+        <span class="section-label">Active downloads</span>
+        <button id="active-cancel-all" class="link-btn" type="button">Cancel all</button>
+      </header>
+      <ul id="active-list"></ul>
+    </section>
+
+    <!-- Context section (yandex track/album, youtube watch/playlist) -->
+    <section id="context" class="context hidden">
+      <header class="section-header">
+        <span class="section-label" id="context-label">From this page</span>
+        <button id="context-action" class="btn small hidden" type="button"></button>
+      </header>
+      <div id="context-body" class="context-body"></div>
+    </section>
+
+    <!-- Search results (or placeholder when empty) -->
+    <section id="results" class="results">
+      <div class="placeholder" id="placeholder">
+        <div class="hero">
+          <img src="icons/icon128.png" alt="" width="56" height="56" />
+          <p class="hero-title">Search Yandex.Music</p>
+          <p class="hero-sub">
+            Or open a YouTube video, YouTube playlist, or Yandex.Music
+            track / album in another tab — qwerf offers a one-click
+            download right here.
+          </p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer id="footer" class="footer hidden">
+    <span id="footer-text"></span>
+  </footer>
+
+  <!-- ============================================================== -->
+  <!--                            templates                            -->
+  <!-- ============================================================== -->
+
+  <!-- Used for search results and the Yandex track context card. -->
+  <template id="result-template">
+    <li class="result" data-track-id="">
+      <a class="cover" target="_blank" rel="noreferrer noopener">
+        <img alt="" loading="lazy" />
+      </a>
+      <a class="meta" target="_blank" rel="noreferrer noopener">
+        <span class="title"></span>
+        <span class="artists"></span>
+      </a>
+      <button class="dl btn" type="button">
+        <svg class="dl-icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+          <path fill="currentColor" d="M11 3h2v9.6l3.3-3.3 1.4 1.4L12 16.4l-5.7-5.7 1.4-1.4L11 12.6V3Zm-7 16h16v2H4v-2Z"/>
+        </svg>
+        <span class="dl-label">Download</span>
+      </button>
+    </li>
+  </template>
+
+  <!-- YouTube single-video context card. -->
+  <template id="yt-context-template">
+    <div class="yt-context">
+      <a class="yt-thumb" target="_blank" rel="noreferrer noopener">
+        <img alt="" loading="lazy" />
+      </a>
+      <div class="yt-body">
+        <a class="yt-title" target="_blank" rel="noreferrer noopener"></a>
+        <div class="yt-sub">
+          <span class="yt-channel"></span>
+          <span class="yt-dot" aria-hidden="true">·</span>
+          <span class="yt-duration"></span>
+        </div>
+        <div class="yt-actions">
+          <button class="yt-audio dl btn" type="button" data-state="idle">
+            <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+              <path fill="currentColor" d="M9 3v10.55A4 4 0 1 0 11 17V7h6V3H9Z"/>
+            </svg>
+            <span class="dl-label">Audio</span>
+          </button>
+          <div class="yt-video-row">
+            <select class="yt-quality" aria-label="Video quality"></select>
+            <button class="yt-video dl btn" type="button" data-state="idle">
+              <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+                <path fill="currentColor" d="M4 5h12a2 2 0 0 1 2 2v3l4-2v8l-4-2v3a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z"/>
+              </svg>
+              <span class="dl-label">Video</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </template>
+
+  <!-- Album / playlist header (cover + title + count + 'Download all'). -->
+  <template id="collection-header-template">
+    <div class="collection-header">
+      <a class="collection-cover" target="_blank" rel="noreferrer noopener">
+        <img alt="" loading="lazy" />
+      </a>
+      <div class="collection-meta">
+        <a class="collection-title" target="_blank" rel="noreferrer noopener"></a>
+        <span class="collection-sub"></span>
+      </div>
+      <div class="collection-actions">
+        <select class="collection-quality hidden" aria-label="Default video quality"></select>
+        <button class="collection-mode hidden btn ghost small" type="button"></button>
+        <button class="collection-all btn" type="button">
+          <span class="dl-label">Download all</span>
+        </button>
+      </div>
+    </div>
+  </template>
+
+  <!-- Single row inside an album / playlist track list. -->
+  <template id="collection-row-template">
+    <li class="collection-row">
+      <span class="row-num"></span>
+      <a class="row-cover" target="_blank" rel="noreferrer noopener">
+        <img alt="" loading="lazy" />
+      </a>
+      <a class="row-meta" target="_blank" rel="noreferrer noopener">
+        <span class="title"></span>
+        <span class="artists"></span>
+      </a>
+      <button class="row-dl dl btn small" type="button">
+        <span class="dl-label">Download</span>
+      </button>
+    </li>
+  </template>
+
+  <!-- Active job row in the persistent panel. -->
+  <template id="active-row-template">
+    <li class="active-row" data-task-id="">
+      <span class="active-kind"></span>
+      <div class="active-meta">
+        <span class="active-title"></span>
+        <span class="active-sub"></span>
+      </div>
+      <span class="active-stage"></span>
+      <button class="active-cancel icon-btn small" type="button" aria-label="Cancel">
+        <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+          <path fill="currentColor" d="M6.4 5 12 10.6 17.6 5 19 6.4 13.4 12 19 17.6 17.6 19 12 13.4 6.4 19 5 17.6 10.6 12 5 6.4Z"/>
+        </svg>
+      </button>
+    </li>
+  </template>
+
+  <template id="context-loading-template">
+    <div class="context-loading">
+      <div class="spinner" aria-hidden="true"></div>
+      <span class="muted">Loading info from this page…</span>
+    </div>
+  </template>
+
+  <template id="context-error-template">
+    <div class="context-error">
+      <span class="status err"></span>
+    </div>
+  </template>
+</body>
+<script src="popup.js"></script>
+</html>

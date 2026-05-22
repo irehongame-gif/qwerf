@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+
+# App data / secrets
+.env
+*.local
+config.local.toml
+ymsync.toml.local
+
+# Music output (don't commit user library)
+Downloaded/
+Exported/
+
+# Chrome extension build artifacts
+extension/dist/
+extension/*.zip
