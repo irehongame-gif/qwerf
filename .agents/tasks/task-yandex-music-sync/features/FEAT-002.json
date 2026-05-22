@@ -2,7 +2,7 @@
   "id": "FEAT-002",
   "type": "fix",
   "description": "Simplify ym-sync to save all tracks as .m4a (native macOS playback). FLAC-in-MP4 and AAC-in-MP4 are both .m4a and play natively. Only convert via ffmpeg if raw FLAC is returned.",
-  "status": "in_progress",
+  "status": "completed",
   "steps": [
     "Update downloader.py: rename download_track_flac to download_track, handle Container.MP4 (save as .m4a, tag with mutagen.mp4.MP4), Container.FLAC (save as .flac, tag with mutagen.flac.FLAC), Container.MP3 (save as .mp3). Return dataclass with path, container, needs_conversion.",
     "Update converter.py: rename convert_to_alac to convert_flac_to_alac (fallback only). Add copy_to_exported() function for copying .m4a files from Downloaded to Exported.",
@@ -25,5 +25,5 @@
     "Run: python3 -c 'from ym_sync.downloader import download_track, DownloadResult; from ym_sync.converter import copy_to_exported, convert_flac_to_alac'"
   ],
   "blocked_reason": null,
-  "findings": null
+  "findings": "All verification passed. pip install -e . succeeds, python3 -m ym_sync --help shows updated description, all modules import cleanly including new DownloadResult dataclass and copy_to_exported/convert_flac_to_alac functions."
 }
